@@ -14,7 +14,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Current phase: `phase3-visualization`
 - Current branch: `evolve/mvp-mvp-capture-recall`
 - Completed tasks: `18`
-- Completed issues: `1`
+- Completed issues: `2`
 
 ## Implemented
 - `mvp-capture-ui`: Capture interface
@@ -37,14 +37,14 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `p3-clustering`: Topic clustering
 
 ## Recent Changes
+- `c32ad08 evolve(p3-clustering): Topic clustering`
 - `2483199 evolve(p3-timeline): Learning timeline`
 - `c80efe1 evolve(p3-graph-view): Force-directed graph visualization`
 - `0d218d9 evolve(p3-graph-data): Graph data model`
 - `e3941a6 evolve(p2-related-notes): Related notes suggestions`
-- `0bbd5ab chore(journal): update timeline`
 
 ## What's Next
-- Pending GitHub issue takes priority: [#3 Replace remaining OpenAI usage with Gemini across the repo](https://github.com/DhrubaDC1/knowledge-hub-evolve/issues/3)
+- No pending actionable GitHub issue detected.
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
 - Next manifest task candidate: `p2-key-insights` in phase `phase2-intelligence` — Key insight extraction
@@ -53,6 +53,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 
 ## Resolved Issues
 - `#2`
+- `#3`
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)
