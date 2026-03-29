@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `6`
+- Completed tasks: `7`
 - Completed issues: `0`
 
 ## Implemented
@@ -23,21 +23,22 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `mvp-summarize-api`: AI summarization serverless function
 - `mvp-link-fetch-api`: Link metadata fetcher
 - `mvp-link-save-flow`: Link auto-fetch on save
+- `mvp-semantic-search-api`: Semantic search serverless function
 
 ## Recent Changes
+- `c9ae9c4 evolve(mvp-link-save-flow): Link auto-fetch on save`
 - `92f0d1a evolve(mvp-link-fetch-api): Link metadata fetcher`
 - `8999b9b Add project README and journal`
 - `863dc96 Switch summarization to Gemini and fix local dev API`
 - `22b70b8 evolve(mvp-summarize-api): AI summarization serverless function`
-- `cae443e evolve(mvp-storage-layer): LocalStorage persistence`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
-- Next manifest task candidate: `mvp-semantic-search-api` in phase `mvp` — Semantic search serverless function
 - Next manifest task candidate: `mvp-search-ui` in phase `mvp` — Semantic search interface
 - Next manifest task candidate: `mvp-tags-ui` in phase `mvp` — Tag system refinement
 - Next manifest task candidate: `mvp-tag-suggestions-api` in phase `mvp` — AI tag suggestions
+- Next manifest task candidate: `mvp-tag-suggestions-ui` in phase `mvp` — Tag suggestions in capture form
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)

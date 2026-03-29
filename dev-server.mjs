@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fetchLinkMetadata } from './lib/fetch-link.js';
+import { searchNotes } from './lib/search.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -127,6 +128,46 @@ async function handleFetchLink(req, res) {
     }
 }
 
+async function handleSearch(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const query = typeof body.query === 'string' ? body.query.trim() : '';
+    const notes = Array.isArray(body.notes) ? body.notes : null;
+
+    if (!query) {
+        return sendJson(res, 400, { error: 'Query is required.' });
+    }
+
+    if (!notes) {
+        return sendJson(res, 400, { error: 'Notes must be an array.' });
+    }
+
+    try {
+        const payload = await searchNotes(query, notes);
+        return sendJson(res, 200, payload);
+    } catch (error) {
+        console.error('Failed to search notes.', error);
+        return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : 'Failed to search notes.'
+        });
+    }
+}
+
 async function handleStaticAsset(req, res, pathname) {
     const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
     const assetPath = path.resolve(PUBLIC_DIR, relativePath);
@@ -165,6 +206,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/fetch-link') {
         await handleFetchLink(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/search') {
+        await handleSearch(req, res);
         return;
     }
 
