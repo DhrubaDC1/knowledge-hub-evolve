@@ -507,6 +507,12 @@ a {
     min-height: 3.2rem;
 }
 
+.notes-search-status {
+    min-height: 1.5em;
+    color: var(--text-muted);
+    font-size: 0.92rem;
+}
+
 .notes-list {
     display: grid;
     gap: var(--space-5);
@@ -570,6 +576,18 @@ a {
 
 .note-time {
     opacity: 0.92;
+}
+
+.note-relevance {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.18rem 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-soft) 56%, transparent);
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    font-weight: 700;
 }
 
 .note-type {

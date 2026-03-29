@@ -4,6 +4,7 @@ const THEME_COLORS = {
     light: '#f3f7fb',
     dark: '#071018'
 };
+const SEARCH_DEBOUNCE_MS = 300;
 const app = document.querySelector('#app');
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -16,6 +17,14 @@ const state = {
     isSavingNote: false,
     saveButtonLabel: 'Save',
     noteUi: {},
+    isSearching: false,
+    searchResults: [],
+    searchResultScores: {},
+    searchSource: '',
+    searchStatusMessage: '',
+    resolvedSearchQuery: '',
+    searchRequestToken: 0,
+    searchDebounceTimer: null,
     themePreference: readThemePreference(),
     activeTheme: 'light'
 };
@@ -421,6 +430,314 @@ function createNoteFromInputs({ content, url, tags }) {
     });
 }
 
+function buildNoteSearchText(note = {}) {
+    return [
+        note.title,
+        note.content,
+        note.url,
+        Array.isArray(note.tags) ? note.tags.join(' ') : ''
+    ]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean)
+        .join('\n');
+}
+
+function calculateLocalSearchScore(note, normalizedQuery, queryTerms) {
+    const title = String(note.title || '').trim().toLowerCase();
+    const content = String(note.content || '').trim().toLowerCase();
+    const url = String(note.url || '').trim().toLowerCase();
+    const tags = Array.isArray(note.tags)
+        ? note.tags.map((tag) => String(tag).trim().toLowerCase()).join(' ')
+        : '';
+    let score = 0;
+
+    if (title.includes(normalizedQuery)) {
+        score += 0.45;
+    }
+
+    if (content.includes(normalizedQuery)) {
+        score += 0.28;
+    }
+
+    if (tags.includes(normalizedQuery)) {
+        score += 0.2;
+    }
+
+    if (url.includes(normalizedQuery)) {
+        score += 0.12;
+    }
+
+    let matchedTerms = 0;
+
+    queryTerms.forEach((term) => {
+        let termMatched = false;
+
+        if (title.includes(term)) {
+            score += 0.18;
+            termMatched = true;
+        }
+
+        if (content.includes(term)) {
+            score += 0.08;
+            termMatched = true;
+        }
+
+        if (tags.includes(term)) {
+            score += 0.08;
+            termMatched = true;
+        }
+
+        if (url.includes(term)) {
+            score += 0.04;
+            termMatched = true;
+        }
+
+        if (termMatched) {
+            matchedTerms += 1;
+        }
+    });
+
+    if (queryTerms.length > 1 && matchedTerms === queryTerms.length) {
+        score += 0.12;
+    }
+
+    return Math.max(0, Math.min(score, 0.99));
+}
+
+function createLocalSearchResults(query, notes) {
+    const normalizedQuery = String(query || '').trim().toLowerCase();
+    const queryTerms = normalizedQuery.split(/\s+/).filter(Boolean);
+
+    if (!normalizedQuery) {
+        return [];
+    }
+
+    return notes
+        .filter((note) => note && typeof note === 'object')
+        .map((note) => ({
+            note,
+            score: calculateLocalSearchScore(note, normalizedQuery, queryTerms),
+            searchText: buildNoteSearchText(note)
+        }))
+        .filter((entry) => entry.score > 0 || entry.searchText.includes(normalizedQuery))
+        .sort((left, right) => {
+            if (right.score !== left.score) {
+                return right.score - left.score;
+            }
+
+            return new Date(right.note.createdAt).getTime() - new Date(left.note.createdAt).getTime();
+        })
+        .map(({ note, score }) => ({ note, score }));
+}
+
+function normalizeSearchScore(score, source = 'api') {
+    const numericScore = Number(score);
+
+    if (!Number.isFinite(numericScore)) {
+        return null;
+    }
+
+    const normalizedScore = source === 'api'
+        ? (numericScore + 1) / 2
+        : numericScore;
+
+    return Math.max(0, Math.min(normalizedScore, 1));
+}
+
+function formatSearchScore(score) {
+    const normalizedScore = normalizeSearchScore(score, 'local');
+
+    if (normalizedScore == null) {
+        return '';
+    }
+
+    return `${Math.round(normalizedScore * 100)}% match`;
+}
+
+function clearScheduledSearch() {
+    if (state.searchDebounceTimer) {
+        window.clearTimeout(state.searchDebounceTimer);
+        state.searchDebounceTimer = null;
+    }
+}
+
+function resetSearchState() {
+    clearScheduledSearch();
+    state.isSearching = false;
+    state.searchResults = [];
+    state.searchResultScores = {};
+    state.searchSource = '';
+    state.searchStatusMessage = '';
+    state.resolvedSearchQuery = '';
+}
+
+async function requestSearchResults(query, notes) {
+    const response = await fetch('/api/search', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query, notes })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Search API not found. Run the app with `npm run dev` so Vercel serves `/api/search`.');
+        }
+
+        throw new Error(payload?.error || 'Could not search notes right now.');
+    }
+
+    return Array.isArray(payload?.results)
+        ? payload.results
+            .map((entry) => {
+                const note = createNoteModel(entry?.note, {
+                    id: entry?.note?.id ? String(entry.note.id) : '',
+                    createdAt: entry?.note?.createdAt || new Date().toISOString(),
+                    updatedAt: entry?.note?.updatedAt || entry?.note?.createdAt || new Date().toISOString()
+                });
+
+                if (!note) {
+                    return null;
+                }
+
+                return {
+                    note,
+                    score: normalizeSearchScore(entry?.score, 'api')
+                };
+            })
+            .filter(Boolean)
+        : [];
+}
+
+function applySearchResults(query, results, source, statusMessage = '') {
+    const trimmedQuery = String(query || '').trim();
+
+    if (!trimmedQuery || trimmedQuery !== state.query.trim()) {
+        return;
+    }
+
+    const normalizedResults = Array.isArray(results)
+        ? results
+            .map((entry) => {
+                const note = createNoteModel(entry?.note, {
+                    id: entry?.note?.id ? String(entry.note.id) : '',
+                    createdAt: entry?.note?.createdAt || new Date().toISOString(),
+                    updatedAt: entry?.note?.updatedAt || entry?.note?.createdAt || new Date().toISOString()
+                });
+
+                if (!note) {
+                    return null;
+                }
+
+                return {
+                    note,
+                    score: normalizeSearchScore(entry?.score, source)
+                };
+            })
+            .filter(Boolean)
+        : [];
+
+    state.isSearching = false;
+    state.searchResults = normalizedResults;
+    state.searchResultScores = Object.fromEntries(
+        normalizedResults
+            .filter(({ note, score }) => note?.id && score != null)
+            .map(({ note, score }) => [note.id, score])
+    );
+    state.searchSource = source;
+    state.searchStatusMessage = statusMessage;
+    state.resolvedSearchQuery = trimmedQuery;
+    renderNotesList();
+}
+
+async function performSearch(query, requestToken) {
+    const trimmedQuery = String(query || '').trim();
+
+    if (!trimmedQuery || requestToken !== state.searchRequestToken) {
+        return;
+    }
+
+    const notes = Storage.getAll();
+
+    try {
+        const results = await requestSearchResults(trimmedQuery, notes);
+
+        if (requestToken !== state.searchRequestToken) {
+            return;
+        }
+
+        applySearchResults(trimmedQuery, results, 'api');
+    } catch (error) {
+        if (requestToken !== state.searchRequestToken) {
+            return;
+        }
+
+        console.error('Failed to search notes via API.', error);
+        applySearchResults(
+            trimmedQuery,
+            createLocalSearchResults(trimmedQuery, notes),
+            'local',
+            'API unavailable. Showing local matches.'
+        );
+    }
+}
+
+function scheduleSearch(query, options = {}) {
+    const trimmedQuery = String(query || '').trim();
+
+    state.searchRequestToken += 1;
+    clearScheduledSearch();
+
+    if (!trimmedQuery) {
+        resetSearchState();
+        renderNotesList();
+        return;
+    }
+
+    state.isSearching = true;
+    state.searchStatusMessage = '';
+    renderNotesList();
+
+    const delay = options.immediate ? 0 : SEARCH_DEBOUNCE_MS;
+    const requestToken = state.searchRequestToken;
+
+    state.searchDebounceTimer = window.setTimeout(() => {
+        state.searchDebounceTimer = null;
+        void performSearch(trimmedQuery, requestToken);
+    }, delay);
+}
+
+function getDisplayedNotes(allNotes) {
+    const trimmedQuery = state.query.trim();
+
+    if (!trimmedQuery) {
+        return allNotes;
+    }
+
+    const allNotesById = new Map(allNotes.map((note) => [note.id, note]));
+
+    if (state.resolvedSearchQuery === trimmedQuery) {
+        return state.searchResults
+            .map(({ note }) => allNotesById.get(note.id))
+            .filter(Boolean);
+    }
+
+    const retainedNotes = state.notes
+        .map((note) => allNotesById.get(note.id))
+        .filter(Boolean);
+
+    return retainedNotes.length ? retainedNotes : allNotes;
+}
+
 function getNoteUiState(noteId) {
     return state.noteUi[noteId] || {
         isSummarizing: false,
@@ -551,7 +868,9 @@ function syncOverview(allNotes) {
     const linkMetric = document.querySelector('#metric-links');
     const summaryMetric = document.querySelector('#metric-summaries');
     const tagMetric = document.querySelector('#metric-tags');
+    const notesTitle = document.querySelector('#notes-panel-title');
     const summaryElement = document.querySelector('#notes-summary');
+    const searchStatusElement = document.querySelector('#notes-search-status');
     const resultsPill = document.querySelector('#notes-results-pill');
     const trimmedQuery = state.query.trim();
 
@@ -571,16 +890,36 @@ function syncOverview(allNotes) {
         tagMetric.textContent = String(metrics.tagCount);
     }
 
+    if (notesTitle) {
+        notesTitle.textContent = trimmedQuery ? 'Search results' : 'Your saved knowledge';
+    }
+
     if (resultsPill) {
-        resultsPill.textContent = trimmedQuery
-            ? `${formatCountLabel(state.notes.length, 'match')}`
-            : `${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}`;
+        if (trimmedQuery && state.isSearching) {
+            resultsPill.textContent = 'Searching...';
+        } else if (trimmedQuery) {
+            resultsPill.textContent = `${formatCountLabel(state.notes.length, 'result')}`;
+        } else {
+            resultsPill.textContent = `${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}`;
+        }
     }
 
     if (summaryElement) {
-        summaryElement.textContent = trimmedQuery
-            ? `Showing ${formatCountLabel(state.notes.length, 'result')} for "${trimmedQuery}".`
-            : `${formatCountLabel(metrics.totalCount, 'saved item')} including ${formatCountLabel(metrics.linkCount, 'link')}, ${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}, and ${formatCountLabel(metrics.tagCount, 'active tag')}.`;
+        if (trimmedQuery && state.isSearching) {
+            summaryElement.textContent = `Searching notes for "${trimmedQuery}"...`;
+        } else if (trimmedQuery && state.searchSource === 'local') {
+            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'local result')} for "${trimmedQuery}".`;
+        } else if (trimmedQuery) {
+            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'result')} for "${trimmedQuery}".`;
+        } else {
+            summaryElement.textContent = `${formatCountLabel(metrics.totalCount, 'saved item')} including ${formatCountLabel(metrics.linkCount, 'link')}, ${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}, and ${formatCountLabel(metrics.tagCount, 'active tag')}.`;
+        }
+    }
+
+    if (searchStatusElement) {
+        searchStatusElement.textContent = trimmedQuery
+            ? (state.isSearching ? 'Searching...' : state.searchStatusMessage)
+            : '';
     }
 }
 
@@ -602,6 +941,8 @@ function createNoteCard(note) {
     const tags = document.createElement('div');
     const uiState = getNoteUiState(note.id);
     const canSummarize = Boolean(note.content && !note.summary);
+    const isSearchResult = state.query.trim() && state.resolvedSearchQuery === state.query.trim();
+    const relevanceScore = state.searchResultScores[note.id];
 
     article.className = 'note-card';
     if (note.type === 'link') {
@@ -621,6 +962,17 @@ function createNoteCard(note) {
     timeLabel.textContent = formatRelativeTime(note.createdAt);
     timeLabel.dateTime = note.createdAt;
     meta.append(typeLabel, timeLabel);
+
+    if (isSearchResult && relevanceScore != null) {
+        const relevance = document.createElement('span');
+
+        relevance.className = 'note-relevance';
+        relevance.textContent = formatSearchScore(relevanceScore);
+        relevance.title = state.searchSource === 'local'
+            ? 'Local text match score'
+            : 'Semantic relevance score';
+        meta.append(relevance);
+    }
 
     actions.className = 'note-actions';
 
@@ -870,7 +1222,13 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
         clearCaptureInputs({ contentInput, urlInput, tagsInput });
         contentInput.focus();
         setFeedback(successMessage);
-        renderNotesList();
+
+        if (state.query.trim()) {
+            scheduleSearch(state.query, { immediate: true });
+        } else {
+            renderNotesList();
+        }
+
         return true;
     } finally {
         state.isSavingNote = false;
@@ -887,10 +1245,7 @@ function renderNotesList() {
     }
 
     const allNotes = Storage.getAll();
-
-    state.notes = state.query.trim()
-        ? Storage.search(state.query)
-        : allNotes;
+    state.notes = getDisplayedNotes(allNotes);
 
     syncOverview(allNotes);
 
@@ -994,7 +1349,7 @@ function renderApp() {
                     <div class="notes-heading">
                         <div class="notes-title-group">
                             <p class="panel-kicker">Library</p>
-                            <h2 class="panel-title">Your saved knowledge</h2>
+                            <h2 id="notes-panel-title" class="panel-title">Your saved knowledge</h2>
                             <p id="notes-summary" class="notes-summary">Browse notes, links, and AI summaries from one place.</p>
                         </div>
 
@@ -1005,6 +1360,7 @@ function renderApp() {
                         <span>Search</span>
                         <input id="notes-search" type="search" placeholder="Search notes, links, and tags...">
                     </label>
+                    <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
 
                     <div id="notes-list" class="notes-list" aria-live="polite"></div>
                 </section>
@@ -1046,7 +1402,19 @@ function renderApp() {
 
     searchInput.addEventListener('input', (event) => {
         state.query = event.target.value;
-        renderNotesList();
+        scheduleSearch(state.query);
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.defaultPrevented || event.altKey || event.shiftKey) {
+            return;
+        }
+
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+            event.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+        }
     });
 
     notesList.addEventListener('click', async (event) => {
@@ -1077,7 +1445,12 @@ function renderApp() {
 
             setFeedback('Deleted.');
             clearNoteUiState(target.dataset.noteId);
-            renderNotesList();
+
+            if (state.query.trim()) {
+                scheduleSearch(state.query, { immediate: true });
+            } else {
+                renderNotesList();
+            }
         } catch (error) {
             console.error('Failed to delete note.', error);
             setFeedback('That note could not be deleted.');
