@@ -1382,6 +1382,199 @@ function createEmptyState(allNotes) {
     return emptyState;
 }
 
+function createJournalStat(label, value) {
+    const stat = document.createElement('article');
+    const statLabel = document.createElement('span');
+    const statValue = document.createElement('strong');
+
+    stat.className = 'journal-stat';
+    statLabel.className = 'journal-stat-label';
+    statLabel.textContent = label;
+    statValue.className = 'journal-stat-value';
+    statValue.textContent = value || '—';
+    stat.append(statLabel, statValue);
+
+    return stat;
+}
+
+function createJournalEntry(entry = {}) {
+    const article = document.createElement('article');
+    const time = document.createElement('p');
+    const body = document.createElement('div');
+    const title = document.createElement('h3');
+    const details = document.createElement('p');
+    const meta = document.createElement('div');
+    const typePill = document.createElement('span');
+
+    article.className = 'journal-entry';
+    time.className = 'journal-entry-time';
+    time.textContent = formatJournalTime(entry.timestamp);
+
+    body.className = 'journal-entry-body';
+
+    title.className = 'journal-entry-title';
+    title.textContent = entry.title || 'Timeline event';
+    body.append(title);
+
+    if (entry.details) {
+        details.className = 'journal-entry-copy';
+        details.textContent = entry.details;
+        body.append(details);
+    }
+
+    meta.className = 'journal-entry-meta';
+
+    typePill.className = 'journal-entry-pill';
+    typePill.textContent = entry.label || 'journal';
+    meta.append(typePill);
+
+    if (entry.item && entry.item !== entry.branch) {
+        const itemPill = document.createElement('span');
+
+        itemPill.className = 'journal-entry-pill journal-entry-pill-muted';
+        itemPill.textContent = entry.item;
+        meta.append(itemPill);
+    }
+
+    if (entry.branch) {
+        const branchPill = document.createElement('span');
+
+        branchPill.className = 'journal-entry-pill journal-entry-pill-muted';
+        branchPill.textContent = entry.branch;
+        meta.append(branchPill);
+    }
+
+    body.append(meta);
+    article.append(time, body);
+
+    return article;
+}
+
+function createJournalDayGroup(group = {}) {
+    const section = document.createElement('section');
+    const labelRow = document.createElement('div');
+    const dayLabel = document.createElement('p');
+    const dateLabel = document.createElement('p');
+    const entries = document.createElement('div');
+
+    section.className = 'journal-day';
+
+    labelRow.className = 'journal-day-heading';
+    dayLabel.className = 'journal-day-label';
+    dayLabel.textContent = `Day ${group.dayNumber || 1}`;
+    dateLabel.className = 'journal-day-date';
+    dateLabel.textContent = formatJournalDate(group.dateKey);
+    labelRow.append(dayLabel, dateLabel);
+
+    entries.className = 'journal-day-list';
+    (group.entries || []).forEach((entry) => {
+        entries.append(createJournalEntry(entry));
+    });
+
+    section.append(labelRow, entries);
+
+    return section;
+}
+
+function renderJournalSection() {
+    const status = document.querySelector('#journal-status');
+    const stats = document.querySelector('#journal-stats');
+    const timeline = document.querySelector('#journal-timeline');
+    const gitHistory = document.querySelector('#journal-git-history');
+    const title = document.querySelector('#journal-panel-title');
+    const copy = document.querySelector('#journal-panel-copy');
+
+    if (!status || !stats || !timeline || !gitHistory || !title || !copy) {
+        return;
+    }
+
+    const journal = state.journal;
+    const snapshot = journal?.snapshot || {};
+    const completedCount = Array.isArray(snapshot.completedTasks) ? snapshot.completedTasks.length : 0;
+
+    title.textContent = journal?.title || 'Evolution journal';
+    copy.textContent = journal?.bootstrappedAt
+        ? `Structured from JOURNAL.md. Latest activity is grouped like a running development log, similar to the reference journal layout.`
+        : 'Structured from JOURNAL.md as a running development log.';
+
+    stats.replaceChildren(
+        createJournalStat('Phase', snapshot.phase || 'Unknown'),
+        createJournalStat('Tasks done', String(completedCount)),
+        createJournalStat('Iterations', snapshot.iterations || '0'),
+        createJournalStat('Commits', snapshot.commits || '0')
+    );
+
+    gitHistory.replaceChildren();
+
+    if (Array.isArray(journal?.recentGitHistory) && journal.recentGitHistory.length) {
+        const fragment = document.createDocumentFragment();
+
+        journal.recentGitHistory.slice(0, 4).forEach((entry) => {
+            const item = document.createElement('li');
+
+            item.className = 'journal-git-item';
+            item.textContent = entry;
+            fragment.append(item);
+        });
+
+        gitHistory.append(fragment);
+    } else {
+        const item = document.createElement('li');
+
+        item.className = 'journal-git-item journal-git-item-muted';
+        item.textContent = 'No recent git history found.';
+        gitHistory.append(item);
+    }
+
+    timeline.replaceChildren();
+
+    if (state.isJournalLoading) {
+        status.textContent = 'Loading journal...';
+        status.hidden = false;
+        return;
+    }
+
+    if (state.journalError) {
+        status.textContent = state.journalError;
+        status.hidden = false;
+        return;
+    }
+
+    const groups = Array.isArray(journal?.groupedEntries) ? journal.groupedEntries : [];
+
+    if (!groups.length) {
+        status.textContent = 'No journal timeline entries yet.';
+        status.hidden = false;
+        return;
+    }
+
+    status.hidden = true;
+
+    const fragment = document.createDocumentFragment();
+
+    groups.forEach((group) => {
+        fragment.append(createJournalDayGroup(group));
+    });
+
+    timeline.append(fragment);
+}
+
+async function loadJournal() {
+    state.isJournalLoading = true;
+    state.journalError = '';
+    renderJournalSection();
+
+    try {
+        state.journal = await requestJournal();
+    } catch (error) {
+        console.error('Failed to load journal.', error);
+        state.journalError = error instanceof Error ? error.message : 'Could not load the journal right now.';
+    } finally {
+        state.isJournalLoading = false;
+        renderJournalSection();
+    }
+}
+
 function syncOverview(allNotes) {
     const metrics = collectKnowledgeMetrics(allNotes);
     const totalMetric = document.querySelector('#metric-total');
@@ -1975,6 +2168,32 @@ function renderApp() {
 
                     <div id="notes-list" class="notes-list" aria-live="polite"></div>
                 </section>
+
+                <section class="panel journal-panel">
+                    <div class="journal-header">
+                        <div class="journal-title-group">
+                            <p class="panel-kicker">// journal</p>
+                            <h2 id="journal-panel-title" class="panel-title">Evolution journal</h2>
+                            <p id="journal-panel-copy" class="panel-copy">Structured from JOURNAL.md as a running development log.</p>
+                        </div>
+                    </div>
+
+                    <div id="journal-stats" class="journal-stats" aria-label="Journal snapshot"></div>
+
+                    <div class="journal-grid">
+                        <div class="journal-timeline-shell">
+                            <p id="journal-status" class="journal-status" aria-live="polite">Loading journal...</p>
+                            <div id="journal-timeline" class="journal-timeline" aria-live="polite"></div>
+                        </div>
+
+                        <aside class="journal-sidebar">
+                            <div class="journal-sidebar-card">
+                                <p class="journal-sidebar-label">Recent git history</p>
+                                <ul id="journal-git-history" class="journal-git-history"></ul>
+                            </div>
+                        </aside>
+                    </div>
+                </section>
             </div>
         </main>
     `;
@@ -2171,6 +2390,8 @@ function renderApp() {
     });
 
     renderNotesList();
+    renderJournalSection();
+    void loadJournal();
 }
 
 themeMediaQuery.addEventListener('change', () => {

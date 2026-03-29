@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `11`
+- Completed tasks: `12`
 - Completed issues: `1`
 
 ## Implemented
@@ -28,21 +28,22 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `mvp-tags-ui`: Tag system refinement
 - `mvp-tag-suggestions-api`: AI tag suggestions
 - `mvp-tag-suggestions-ui`: Tag suggestions in capture form
+- `mvp-deploy-check`: Deployment verification
 
 ## Recent Changes
+- `0b64630 fix(issue-2): untagged ui is broken`
 - `e94d291 evolve(mvp-tag-suggestions-ui): Tag suggestions in capture form`
 - `7df55f1 evolve(mvp-tag-suggestions-api): AI tag suggestions`
 - `f1f50f2 evolve(mvp-tags-ui): Tag system refinement`
 - `db8d951 evolve(mvp-search-ui): Semantic search interface`
-- `4ac94a5 evolve(mvp-semantic-search-api): Semantic search serverless function`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
-- Next manifest task candidate: `mvp-deploy-check` in phase `mvp` — Deployment verification
 - Next manifest task candidate: `p2-auto-tag` in phase `phase2-intelligence` — Auto-tag on save
 - Next manifest task candidate: `p2-related-notes` in phase `phase2-intelligence` — Related notes suggestions
+- Next manifest task candidate: `p2-key-insights` in phase `phase2-intelligence` — Key insight extraction
 
 ## Resolved Issues
 - `#2`
