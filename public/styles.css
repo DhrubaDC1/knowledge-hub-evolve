@@ -536,6 +536,12 @@ a {
     box-shadow: var(--shadow-card-hover);
 }
 
+.note-card-link {
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 36%, transparent), transparent 96px),
+        var(--surface-strong);
+}
+
 .note-top {
     display: flex;
     justify-content: space-between;
@@ -664,21 +670,35 @@ a {
 }
 
 .note-link {
-    display: inline-flex;
-    width: fit-content;
-    max-width: 100%;
-    padding: 0.72rem 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-muted);
+    min-width: 0;
     word-break: break-all;
+    color: var(--text);
     transition: border-color 160ms ease, transform 160ms ease, color 160ms ease;
 }
 
 .note-link:hover {
     color: var(--accent-strong);
-    border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
     transform: translateY(-1px);
+}
+
+.note-link-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: 0.72rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+}
+
+.note-favicon {
+    width: 1.15rem;
+    height: 1.15rem;
+    border-radius: 0.3rem;
+    flex: none;
+    object-fit: cover;
+    background: color-mix(in srgb, var(--surface-strong) 85%, transparent);
 }
 
 .note-tags {

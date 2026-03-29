@@ -14,6 +14,7 @@ const state = {
     feedback: '',
     captureAutoSummarize: false,
     isSavingNote: false,
+    saveButtonLabel: 'Save',
     noteUi: {},
     themePreference: readThemePreference(),
     activeTheme: 'light'
@@ -143,6 +144,7 @@ class KnowledgeHubStorage {
             const haystack = [
                 note.title,
                 note.content,
+                note.url,
                 note.tags.join(' ')
             ]
                 .join(' ')
@@ -243,6 +245,7 @@ function createNoteModel(note = {}, overrides = {}) {
 
     const content = typeof note.content === 'string' ? note.content.trim() : '';
     const url = typeof note.url === 'string' ? note.url.trim() : '';
+    const favicon = typeof note.favicon === 'string' ? note.favicon.trim() : '';
     const type = note.type === 'link' || url ? 'link' : 'note';
     const title = typeof note.title === 'string' && note.title.trim()
         ? note.title.trim()
@@ -257,6 +260,7 @@ function createNoteModel(note = {}, overrides = {}) {
         type,
         content,
         url,
+        favicon,
         title,
         summary,
         tags,
@@ -359,6 +363,44 @@ function parseTags(value) {
         .filter(Boolean);
 }
 
+function prependDescriptionToContent(description, content) {
+    const trimmedDescription = typeof description === 'string' ? description.trim() : '';
+    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+
+    if (!trimmedDescription) {
+        return trimmedContent;
+    }
+
+    if (!trimmedContent) {
+        return trimmedDescription;
+    }
+
+    if (trimmedContent.startsWith(trimmedDescription)) {
+        return trimmedContent;
+    }
+
+    return `${trimmedDescription}\n\n${trimmedContent}`;
+}
+
+function mergeLinkMetadata(note, metadata) {
+    const nextUrl = typeof metadata?.url === 'string' && metadata.url.trim()
+        ? metadata.url.trim()
+        : note.url;
+    const nextTitle = typeof metadata?.title === 'string' && metadata.title.trim()
+        ? metadata.title.trim()
+        : note.title;
+    const nextFavicon = typeof metadata?.favicon === 'string' ? metadata.favicon.trim() : '';
+
+    return createNoteModel({
+        ...note,
+        type: 'link',
+        url: nextUrl,
+        title: nextTitle,
+        favicon: nextFavicon,
+        content: prependDescriptionToContent(metadata?.description, note.content)
+    });
+}
+
 function createNoteFromInputs({ content, url, tags }) {
     const trimmedContent = content.trim();
     const trimmedUrl = url.trim();
@@ -429,6 +471,39 @@ async function requestSummary(text) {
     }
 
     return summary;
+}
+
+async function requestLinkMetadata(url) {
+    const response = await fetch('/api/fetch-link', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ url })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Link metadata API not found. Run the app with `npm run dev` so Vercel serves `/api/fetch-link`.');
+        }
+
+        throw new Error(payload?.error || 'Could not fetch link info right now.');
+    }
+
+    return {
+        title: typeof payload?.title === 'string' ? payload.title.trim() : '',
+        description: typeof payload?.description === 'string' ? payload.description.trim() : '',
+        favicon: typeof payload?.favicon === 'string' ? payload.favicon.trim() : '',
+        url: typeof payload?.url === 'string' ? payload.url.trim() : url.trim()
+    };
 }
 
 function setFeedback(message) {
@@ -520,6 +595,7 @@ function createNoteCard(note) {
     const actions = document.createElement('div');
     const summarizeButton = document.createElement('button');
     const deleteButton = document.createElement('button');
+    const linkPreview = document.createElement('div');
     const bodyText = document.createElement('p');
     const summaryText = document.createElement('p');
     const errorText = document.createElement('p');
@@ -528,6 +604,9 @@ function createNoteCard(note) {
     const canSummarize = Boolean(note.content && !note.summary);
 
     article.className = 'note-card';
+    if (note.type === 'link') {
+        article.classList.add('note-card-link');
+    }
     article.dataset.noteId = note.id;
 
     topRow.className = 'note-top';
@@ -587,13 +666,31 @@ function createNoteCard(note) {
     article.append(topRow);
 
     if (note.type === 'link' && note.url) {
+        linkPreview.className = 'note-link-row';
+
+        if (note.favicon) {
+            const favicon = document.createElement('img');
+
+            favicon.className = 'note-favicon';
+            favicon.src = note.favicon;
+            favicon.alt = '';
+            favicon.loading = 'lazy';
+            favicon.decoding = 'async';
+            favicon.referrerPolicy = 'no-referrer';
+            favicon.addEventListener('error', () => {
+                favicon.remove();
+            }, { once: true });
+            linkPreview.append(favicon);
+        }
+
         const link = document.createElement('a');
         link.className = 'note-link';
         link.href = note.url;
         link.target = '_blank';
-        link.rel = 'noreferrer';
+        link.rel = 'noopener noreferrer';
         link.textContent = note.url;
-        article.append(link);
+        linkPreview.append(link);
+        article.append(linkPreview);
     }
 
     if (note.content) {
@@ -637,13 +734,18 @@ function clearCaptureInputs({ contentInput, urlInput, tagsInput }) {
     tagsInput.value = '';
 }
 
+function setSaveButtonLabel(label, saveButton) {
+    state.saveButtonLabel = label;
+    updateSaveButton(saveButton);
+}
+
 function updateSaveButton(saveButton) {
     if (!saveButton) {
         return;
     }
 
     saveButton.disabled = state.isSavingNote;
-    saveButton.textContent = state.isSavingNote ? 'Saving...' : 'Save';
+    saveButton.textContent = state.isSavingNote ? state.saveButtonLabel : 'Save';
 }
 
 async function summarizeNote(noteId) {
@@ -696,29 +798,56 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
     }
 
     state.isSavingNote = true;
+    state.saveButtonLabel = 'Saving...';
     updateSaveButton(saveButton);
 
     let noteToSave = nextNote;
     let successMessage = 'Saved.';
+    let linkMetadataErrorMessage = '';
     let summaryErrorMessage = '';
 
     try {
-        if (state.captureAutoSummarize && nextNote.content) {
+        if (nextNote.type === 'link' && nextNote.url) {
+            setFeedback('Fetching link info...');
+            setSaveButtonLabel('Fetching link info...', saveButton);
+
+            try {
+                const metadata = await requestLinkMetadata(nextNote.url);
+                noteToSave = mergeLinkMetadata(noteToSave, metadata);
+            } catch (error) {
+                console.error('Failed to fetch link metadata before saving note.', error);
+                linkMetadataErrorMessage = error instanceof Error
+                    ? error.message
+                    : 'Could not fetch link info right now.';
+            }
+        }
+
+        if (state.captureAutoSummarize && noteToSave.content) {
             setFeedback('Saving and summarizing...');
+            setSaveButtonLabel('Saving...', saveButton);
             noteToSave = {
                 ...nextNote,
-                summary: await requestSummary(nextNote.content)
+                ...noteToSave,
+                summary: await requestSummary(noteToSave.content)
             };
-            successMessage = 'Saved and summarized.';
+            successMessage = linkMetadataErrorMessage
+                ? `Saved and summarized. Link info unavailable, so the raw URL was saved.`
+                : 'Saved and summarized.';
         } else {
-            setFeedback('Saving...');
+            setFeedback(linkMetadataErrorMessage ? 'Saving with raw URL...' : 'Saving...');
+            setSaveButtonLabel('Saving...', saveButton);
+            successMessage = linkMetadataErrorMessage
+                ? 'Saved with raw URL.'
+                : 'Saved.';
         }
     } catch (error) {
         console.error('Failed to summarize before saving note.', error);
         summaryErrorMessage = error instanceof Error
             ? error.message
             : 'Could not summarize this note right now.';
-        successMessage = `Saved without summary. ${summaryErrorMessage}`;
+        successMessage = linkMetadataErrorMessage
+            ? `Saved with raw URL and without summary. ${summaryErrorMessage}`
+            : `Saved without summary. ${summaryErrorMessage}`;
     }
 
     try {
@@ -745,6 +874,7 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
         return true;
     } finally {
         state.isSavingNote = false;
+        state.saveButtonLabel = 'Save';
         updateSaveButton(saveButton);
     }
 }
