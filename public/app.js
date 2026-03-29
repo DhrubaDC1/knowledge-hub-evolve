@@ -43,6 +43,9 @@ const TIMELINE_DAY_GROUP_WINDOW_DAYS = 7;
 const UNTAGGED_FILTER_VALUE = '__untagged__';
 const UNTAGGED_FILTER_LABEL = 'untagged';
 const REVISIT_SUGGESTIONS_MAX_RESULTS = 4;
+const KNOWLEDGE_HEALTH_ACTIVITY_WINDOW_DAYS = 28;
+const KNOWLEDGE_HEALTH_MAX_SUGGESTIONS = 3;
+const KNOWLEDGE_HEALTH_DAY_IN_MS = 86_400_000;
 const GRAPH_STOP_WORDS = new Set([
     'a',
     'an',
@@ -75,6 +78,19 @@ const GRAPH_STOP_WORDS = new Set([
     'with',
     'you',
     'your'
+]);
+const KNOWLEDGE_HEALTH_STOP_WORDS = new Set([
+    ...GRAPH_STOP_WORDS,
+    'into',
+    'just',
+    'link',
+    'links',
+    'note',
+    'notes',
+    'saved',
+    'summary',
+    'them',
+    'they'
 ]);
 const app = document.querySelector('#app');
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
@@ -1766,6 +1782,474 @@ function normalizeInsights(value) {
     });
 
     return insights;
+}
+
+function clampNumber(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function getValidTimestamp(dateValue) {
+    const timestamp = new Date(dateValue).getTime();
+
+    return Number.isNaN(timestamp) ? Number.NaN : timestamp;
+}
+
+function getUtcDateKey(dateValue) {
+    const timestamp = getValidTimestamp(dateValue);
+
+    if (!Number.isFinite(timestamp)) {
+        return '';
+    }
+
+    const date = new Date(timestamp);
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
+
+function getUtcWeekKey(dateKey) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''))) {
+        return '';
+    }
+
+    const date = new Date(`${dateKey}T00:00:00.000Z`);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    const day = date.getUTCDay() || 7;
+
+    date.setUTCDate(date.getUTCDate() - day + 1);
+    return getUtcDateKey(date.toISOString());
+}
+
+function normalizeKnowledgeHealthToken(token) {
+    const normalizedToken = String(token || '').toLowerCase();
+
+    if (normalizedToken.length > 4 && normalizedToken.endsWith('ies')) {
+        return `${normalizedToken.slice(0, -3)}y`;
+    }
+
+    if (normalizedToken.length > 5 && normalizedToken.endsWith('ing')) {
+        return normalizedToken.slice(0, -3);
+    }
+
+    if (normalizedToken.length > 4 && normalizedToken.endsWith('ed')) {
+        return normalizedToken.slice(0, -2);
+    }
+
+    if (normalizedToken.length > 4 && normalizedToken.endsWith('es')) {
+        return normalizedToken.slice(0, -2);
+    }
+
+    if (normalizedToken.length > 3 && normalizedToken.endsWith('s')) {
+        return normalizedToken.slice(0, -1);
+    }
+
+    return normalizedToken;
+}
+
+function tokenizeKnowledgeHealthText(value, limit = Number.POSITIVE_INFINITY) {
+    const matches = String(value || '').toLowerCase().match(/[a-z0-9]+(?:['-][a-z0-9]+)*/g) || [];
+    const tokens = [];
+    const seen = new Set();
+
+    matches.forEach((token) => {
+        if (tokens.length >= limit) {
+            return;
+        }
+
+        const normalizedToken = normalizeKnowledgeHealthToken(token);
+
+        if (normalizedToken.length <= 2 || KNOWLEDGE_HEALTH_STOP_WORDS.has(normalizedToken) || seen.has(normalizedToken)) {
+            return;
+        }
+
+        seen.add(normalizedToken);
+        tokens.push(normalizedToken);
+    });
+
+    return tokens;
+}
+
+function getNoteActivityTimestamps(note = {}) {
+    const revisit = normalizeRevisitState(note.revisit);
+    const timestamps = new Set();
+    const dateValues = [
+        note.createdAt,
+        revisit.lastViewedAt,
+        revisit.lastReviewedAt,
+        ...revisit.viewHistory,
+        ...revisit.reviewHistory
+    ];
+
+    dateValues.forEach((dateValue) => {
+        const timestamp = getValidTimestamp(dateValue);
+
+        if (Number.isFinite(timestamp)) {
+            timestamps.add(timestamp);
+        }
+    });
+
+    return [...timestamps].sort((left, right) => left - right);
+}
+
+function collectKnowledgeHealthTopics(note = {}) {
+    const topics = new Set(normalizeTags(note.tags));
+    const addTokens = (value, limit) => {
+        tokenizeKnowledgeHealthText(value, limit).forEach((token) => topics.add(token));
+    };
+
+    addTokens(note.title, 3);
+    addTokens(note.summary, 4);
+    addTokens(note.content, 6);
+    normalizeInsights(note.insights).forEach((insight) => addTokens(insight, 2));
+
+    return topics;
+}
+
+function getKnowledgeHealthTone(score) {
+    if (score >= 80) {
+        return 'strong';
+    }
+
+    if (score >= 55) {
+        return 'steady';
+    }
+
+    return 'growing';
+}
+
+function getKnowledgeHealthSummary(score, noteCount, weakestFactor) {
+    if (!noteCount) {
+        return {
+            title: 'Ready to build',
+            message: 'Save a few notes and this score will start climbing quickly.'
+        };
+    }
+
+    if (score >= 85) {
+        return {
+            title: 'Excellent shape',
+            message: `Your library feels fresh, detailed, and reusable. Keep ${weakestFactor.toLowerCase()} moving and it stays that way.`
+        };
+    }
+
+    if (score >= 70) {
+        return {
+            title: 'Healthy momentum',
+            message: `You already have a strong base. A few small upgrades to ${weakestFactor.toLowerCase()} will make recall even easier.`
+        };
+    }
+
+    if (score >= 50) {
+        return {
+            title: 'Solid foundation',
+            message: `The hub is starting to hold together well. Strengthening ${weakestFactor.toLowerCase()} should lift the score fast.`
+        };
+    }
+
+    if (score >= 30) {
+        return {
+            title: 'Growing steadily',
+            message: `There is real material here already. A bit more structure around ${weakestFactor.toLowerCase()} will compound quickly.`
+        };
+    }
+
+    return {
+        title: 'Just getting started',
+        message: 'A few richer, better-linked notes will move this score faster than it looks.'
+    };
+}
+
+function buildKnowledgeHealthSuggestions(factors, noteCount) {
+    if (!noteCount) {
+        return [
+            {
+                key: 'recency',
+                title: 'Save the first spark',
+                message: 'Capture one idea, article, or observation today so the score has something to build on.'
+            },
+            {
+                key: 'depth',
+                title: 'Write one layer deeper',
+                message: 'A short summary or two concrete takeaways makes the first notes far more reusable.'
+            },
+            {
+                key: 'connections',
+                title: 'Start a tag trail',
+                message: 'Use a couple of simple tags from the start so related notes can connect as the hub grows.'
+            }
+        ];
+    }
+
+    const suggestionCopy = {
+        recency: {
+            title: 'Refresh the library',
+            message: 'Capture one small note or link today. Fresh activity lifts the score quickly.'
+        },
+        consistency: {
+            title: 'Spread learning across the week',
+            message: 'A few separate capture days beat one large batch when you want ideas to stay warm.'
+        },
+        diversity: {
+            title: 'Widen the topic mix',
+            message: 'Add notes from a couple of different themes so the hub becomes a broader map of what you know.'
+        },
+        depth: {
+            title: 'Go one layer deeper',
+            message: 'Turn thin captures into reusable knowledge with a short summary or a few key insights.'
+        },
+        connections: {
+            title: 'Link related ideas',
+            message: 'Reuse tags across neighboring notes so patterns, clusters, and revisit prompts get smarter.'
+        }
+    };
+
+    return [...factors]
+        .sort((left, right) => left.score - right.score)
+        .slice(0, KNOWLEDGE_HEALTH_MAX_SUGGESTIONS)
+        .map((factor) => ({
+            key: factor.key,
+            ...suggestionCopy[factor.key]
+        }));
+}
+
+function calculateKnowledgeHealth(notes = []) {
+    const normalizedNotes = (Array.isArray(notes) ? notes : []).filter((note) => note && typeof note === 'object');
+    const noteCount = normalizedNotes.length;
+    const allActivityTimestamps = normalizedNotes
+        .flatMap((note) => getNoteActivityTimestamps(note))
+        .sort((left, right) => left - right);
+    const latestActivityTimestamp = allActivityTimestamps.at(-1) || 0;
+    const daysSinceLatestActivity = latestActivityTimestamp
+        ? Math.max(0, Math.floor((Date.now() - latestActivityTimestamp) / KNOWLEDGE_HEALTH_DAY_IN_MS))
+        : Number.POSITIVE_INFINITY;
+    let recencyScore = 0;
+
+    if (noteCount > 0) {
+        if (daysSinceLatestActivity <= 1) {
+            recencyScore = 100;
+        } else if (daysSinceLatestActivity <= 3) {
+            recencyScore = 92;
+        } else if (daysSinceLatestActivity <= 7) {
+            recencyScore = 82;
+        } else if (daysSinceLatestActivity <= 14) {
+            recencyScore = 68;
+        } else if (daysSinceLatestActivity <= 30) {
+            recencyScore = 54;
+        } else if (daysSinceLatestActivity <= 60) {
+            recencyScore = 38;
+        } else {
+            recencyScore = 22;
+        }
+    }
+
+    const nowTimestamp = Date.now();
+    const recentCutoffTimestamp = nowTimestamp - ((KNOWLEDGE_HEALTH_ACTIVITY_WINDOW_DAYS - 1) * KNOWLEDGE_HEALTH_DAY_IN_MS);
+    const recentActivityDayKeys = [...new Set(
+        allActivityTimestamps
+            .filter((timestamp) => timestamp >= recentCutoffTimestamp)
+            .map((timestamp) => getUtcDateKey(new Date(timestamp).toISOString()))
+            .filter(Boolean)
+    )].sort((left, right) => left.localeCompare(right));
+    const activeWeeks = new Set(recentActivityDayKeys.map((dateKey) => getUtcWeekKey(dateKey)).filter(Boolean));
+    let activeStreak = 0;
+
+    if (recentActivityDayKeys.length) {
+        const today = new Date();
+        const startOfTodayUtc = Date.UTC(
+            today.getUTCFullYear(),
+            today.getUTCMonth(),
+            today.getUTCDate()
+        );
+        const latestActivityDay = recentActivityDayKeys.at(-1) || '';
+        const latestActivityDayTimestamp = latestActivityDay
+            ? new Date(`${latestActivityDay}T00:00:00.000Z`).getTime()
+            : Number.NaN;
+        const latestGapDays = Number.isFinite(latestActivityDayTimestamp)
+            ? Math.round((startOfTodayUtc - latestActivityDayTimestamp) / KNOWLEDGE_HEALTH_DAY_IN_MS)
+            : Number.POSITIVE_INFINITY;
+
+        if (latestGapDays <= 1) {
+            activeStreak = 1;
+
+            for (let index = recentActivityDayKeys.length - 1; index > 0; index -= 1) {
+                const currentTimestamp = new Date(`${recentActivityDayKeys[index]}T00:00:00.000Z`).getTime();
+                const previousTimestamp = new Date(`${recentActivityDayKeys[index - 1]}T00:00:00.000Z`).getTime();
+
+                if (Math.round((currentTimestamp - previousTimestamp) / KNOWLEDGE_HEALTH_DAY_IN_MS) !== 1) {
+                    break;
+                }
+
+                activeStreak += 1;
+            }
+        }
+    }
+
+    const consistencyScore = noteCount > 0
+        ? Math.round(clampNumber(
+            ((recentActivityDayKeys.length / 12) * 60)
+                + ((activeWeeks.size / 4) * 25)
+                + ((Math.min(activeStreak, 7) / 7) * 15),
+            0,
+            100
+        ))
+        : 0;
+    const noteTopicSets = normalizedNotes.map((note) => collectKnowledgeHealthTopics(note));
+    const topicNoteCounts = noteTopicSets.reduce((topicMap, topicSet) => {
+        topicSet.forEach((topic) => {
+            topicMap.set(topic, (topicMap.get(topic) || 0) + 1);
+        });
+
+        return topicMap;
+    }, new Map());
+    const diversityTopicCounts = [...topicNoteCounts.values()].filter((value) => Number.isFinite(value) && value > 0);
+    const uniqueTopics = diversityTopicCounts.length;
+    let diversityScore = 0;
+    let diversityLabel = 'Narrow';
+
+    if (uniqueTopics === 1) {
+        diversityScore = 14;
+    } else if (uniqueTopics > 1) {
+        const totalWeight = diversityTopicCounts.reduce((sum, value) => sum + value, 0);
+        const entropy = diversityTopicCounts.reduce((sum, value) => {
+            const probability = value / totalWeight;
+
+            return sum - (probability * Math.log(probability));
+        }, 0);
+        const normalizedEntropy = entropy / Math.log(uniqueTopics);
+        const breadth = Math.min(1, uniqueTopics / 12);
+
+        diversityScore = Math.round(((normalizedEntropy * 0.65) + (breadth * 0.35)) * 100);
+    }
+
+    if (diversityScore >= 72) {
+        diversityLabel = 'Broad';
+    } else if (diversityScore >= 42) {
+        diversityLabel = 'Balanced';
+    } else {
+        diversityLabel = 'Focused';
+    }
+
+    const richnessScores = normalizedNotes.map((note) => {
+        const contentLength = String(note.content || '').trim().length;
+        const summaryLength = String(note.summary || '').trim().length;
+        const insightsCount = normalizeInsights(note.insights).length;
+        const tagCount = normalizeTags(note.tags).length;
+        const sourceDocument = normalizeSourceDocument(note.sourceDocument);
+        const hasSourceContext = Boolean(note.url || sourceDocument);
+
+        return clampNumber(
+            (Math.min(contentLength, 480) / 480) * 0.55
+                + (summaryLength > 0 ? 0.16 : 0)
+                + ((Math.min(insightsCount, 3) / 3) * 0.14)
+                + ((Math.min(tagCount, 4) / 4) * 0.1)
+                + (hasSourceContext ? 0.05 : 0),
+            0,
+            1
+        );
+    });
+    const averageRichness = richnessScores.length
+        ? richnessScores.reduce((sum, value) => sum + value, 0) / richnessScores.length
+        : 0;
+    const substantiveNotes = richnessScores.filter((value) => value >= 0.6).length;
+    const depthScore = Math.round(averageRichness * 100);
+    const connectedNotes = new Set();
+    let connectedPairs = 0;
+    let sharedTopicStrength = 0;
+
+    for (let leftIndex = 0; leftIndex < noteTopicSets.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < noteTopicSets.length; rightIndex += 1) {
+            let overlapCount = 0;
+
+            noteTopicSets[leftIndex].forEach((topic) => {
+                if (noteTopicSets[rightIndex].has(topic)) {
+                    overlapCount += 1;
+                }
+            });
+
+            if (!overlapCount) {
+                continue;
+            }
+
+            connectedPairs += 1;
+            sharedTopicStrength += Math.min(overlapCount, 4);
+            connectedNotes.add(leftIndex);
+            connectedNotes.add(rightIndex);
+        }
+    }
+
+    const possiblePairs = noteCount > 1 ? (noteCount * (noteCount - 1)) / 2 : 0;
+    const connectionCoverage = noteCount > 0 ? connectedNotes.size / noteCount : 0;
+    const connectionDensity = possiblePairs > 0 ? connectedPairs / possiblePairs : 0;
+    const connectionStrength = connectedPairs > 0 ? Math.min(1, sharedTopicStrength / (connectedPairs * 2.2)) : 0;
+    const connectionsScore = noteCount <= 1
+        ? (noteCount === 1 ? 24 : 0)
+        : Math.round(((connectionCoverage * 0.5) + (connectionDensity * 0.3) + (connectionStrength * 0.2)) * 100);
+    const factors = [
+        {
+            key: 'recency',
+            label: 'Recency',
+            score: recencyScore,
+            meta: latestActivityTimestamp
+                ? `Last activity ${formatRelativeTime(new Date(latestActivityTimestamp).toISOString())}.`
+                : 'No recent activity yet.'
+        },
+        {
+            key: 'consistency',
+            label: 'Consistency',
+            score: consistencyScore,
+            meta: recentActivityDayKeys.length
+                ? `${formatCountLabel(recentActivityDayKeys.length, 'active day')} across ${formatCountLabel(activeWeeks.size, 'week')} lately.`
+                : 'No learning rhythm yet.'
+        },
+        {
+            key: 'diversity',
+            label: 'Diversity',
+            score: diversityScore,
+            meta: uniqueTopics
+                ? `${diversityLabel} spread across ${formatCountLabel(uniqueTopics, 'theme')}.`
+                : 'Themes will emerge as you save more notes.'
+        },
+        {
+            key: 'depth',
+            label: 'Depth',
+            score: depthScore,
+            meta: noteCount
+                ? `${formatCountLabel(substantiveNotes, 'note')} already carry strong detail or summaries.`
+                : 'Add more detail to build reuse.'
+        },
+        {
+            key: 'connections',
+            label: 'Connections',
+            score: connectionsScore,
+            meta: connectedPairs
+                ? `${formatCountLabel(connectedNotes.size, 'note')} already link through shared themes.`
+                : 'Related tags will help ideas start connecting.'
+        }
+    ];
+    const overallScore = Math.round(
+        (recencyScore * 0.23)
+        + (consistencyScore * 0.22)
+        + (diversityScore * 0.2)
+        + (depthScore * 0.18)
+        + (connectionsScore * 0.17)
+    );
+    const weakestFactor = [...factors].sort((left, right) => left.score - right.score)[0] || factors[0];
+    const summary = getKnowledgeHealthSummary(overallScore, noteCount, weakestFactor?.label || 'coverage');
+
+    return {
+        score: overallScore,
+        tone: getKnowledgeHealthTone(overallScore),
+        title: summary.title,
+        message: summary.message,
+        factors,
+        suggestions: buildKnowledgeHealthSuggestions(factors, noteCount)
+    };
 }
 
 function normalizeSourceDocument(value) {
@@ -4290,6 +4774,146 @@ function createTrendDay(day = {}, maxCount = 0) {
     return item;
 }
 
+function createKnowledgeHealthRing(health = {}) {
+    const ring = document.createElement('div');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const track = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    const progress = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    const copy = document.createElement('div');
+    const value = document.createElement('strong');
+    const label = document.createElement('span');
+    const radius = 52;
+    const circumference = 2 * Math.PI * radius;
+    const score = clampNumber(Number(health.score) || 0, 0, 100);
+    const dashOffset = circumference - ((score / 100) * circumference);
+
+    ring.className = 'health-ring';
+    ring.dataset.tone = health.tone || 'growing';
+    ring.setAttribute('role', 'img');
+    ring.setAttribute('aria-label', `Knowledge health score ${score} out of 100`);
+
+    svg.classList.add('health-ring-graphic');
+    svg.setAttribute('viewBox', '0 0 120 120');
+    track.classList.add('health-ring-track');
+    progress.classList.add('health-ring-progress');
+
+    [track, progress].forEach((circle) => {
+        circle.setAttribute('cx', '60');
+        circle.setAttribute('cy', '60');
+        circle.setAttribute('r', String(radius));
+    });
+
+    progress.style.strokeDasharray = String(circumference);
+    progress.style.strokeDashoffset = String(dashOffset);
+
+    copy.className = 'health-ring-copy';
+    value.className = 'health-ring-value';
+    value.textContent = String(score);
+    label.className = 'health-ring-label';
+    label.textContent = 'Out of 100';
+
+    svg.append(track, progress);
+    copy.append(value, label);
+    ring.append(svg, copy);
+
+    return ring;
+}
+
+function createKnowledgeHealthFactorCard(factor = {}) {
+    const card = document.createElement('article');
+    const label = document.createElement('p');
+    const score = document.createElement('strong');
+    const meta = document.createElement('p');
+
+    card.className = 'health-factor-card';
+    card.dataset.tone = getKnowledgeHealthTone(factor.score || 0);
+
+    label.className = 'health-factor-label';
+    label.textContent = factor.label || 'Coverage';
+
+    score.className = 'health-factor-score';
+    score.textContent = String(Math.round(factor.score || 0));
+
+    meta.className = 'health-factor-meta';
+    meta.textContent = factor.meta || '';
+
+    card.append(label, score, meta);
+    return card;
+}
+
+function createKnowledgeHealthSuggestionCard(suggestion = {}) {
+    const item = document.createElement('li');
+    const card = document.createElement('article');
+    const title = document.createElement('p');
+    const message = document.createElement('p');
+
+    item.className = 'health-suggestion-item';
+    card.className = 'health-suggestion-card';
+    title.className = 'health-suggestion-title';
+    title.textContent = suggestion.title || 'Keep it moving';
+    message.className = 'health-suggestion-copy';
+    message.textContent = suggestion.message || 'Small, regular improvements compound quickly.';
+    card.append(title, message);
+    item.append(card);
+
+    return item;
+}
+
+function renderKnowledgeHealth(allNotes = Storage.getAll()) {
+    const container = document.querySelector('#knowledge-health');
+
+    if (!container) {
+        return;
+    }
+
+    const health = calculateKnowledgeHealth(allNotes);
+    const overview = document.createElement('div');
+    const copy = document.createElement('div');
+    const kicker = document.createElement('p');
+    const title = document.createElement('h4');
+    const message = document.createElement('p');
+    const breakdown = document.createElement('div');
+    const suggestionWrap = document.createElement('div');
+    const suggestionHeader = document.createElement('div');
+    const suggestionTitle = document.createElement('p');
+    const suggestionMeta = document.createElement('p');
+    const suggestionList = document.createElement('ul');
+
+    container.dataset.tone = health.tone;
+    overview.className = 'health-overview';
+    copy.className = 'health-copy';
+    kicker.className = 'health-kicker';
+    kicker.textContent = 'Knowledge health';
+    title.className = 'health-title';
+    title.textContent = health.title;
+    message.className = 'health-message';
+    message.textContent = health.message;
+
+    breakdown.className = 'health-breakdown';
+    health.factors.forEach((factor) => {
+        breakdown.append(createKnowledgeHealthFactorCard(factor));
+    });
+
+    copy.append(kicker, title, message, breakdown);
+    overview.append(createKnowledgeHealthRing(health), copy);
+
+    suggestionWrap.className = 'health-suggestions';
+    suggestionHeader.className = 'health-suggestions-header';
+    suggestionTitle.className = 'health-suggestions-title';
+    suggestionTitle.textContent = 'Next best lifts';
+    suggestionMeta.className = 'health-suggestions-meta';
+    suggestionMeta.textContent = 'Small habits that will raise the score fastest.';
+    suggestionHeader.append(suggestionTitle, suggestionMeta);
+
+    suggestionList.className = 'health-suggestion-list';
+    health.suggestions.forEach((suggestion) => {
+        suggestionList.append(createKnowledgeHealthSuggestionCard(suggestion));
+    });
+
+    suggestionWrap.append(suggestionHeader, suggestionList);
+    container.replaceChildren(overview, suggestionWrap);
+}
+
 function renderInsightsView(allNotes = Storage.getAll()) {
     const view = document.querySelector('#insights-view');
     const status = document.querySelector('#insights-status');
@@ -4310,6 +4934,7 @@ function renderInsightsView(allNotes = Storage.getAll()) {
     if (!noteCount) {
         status.textContent = 'Save a few notes to unlock pattern analysis.';
         summary.textContent = 'Insights appear once the library has enough activity to summarize.';
+        renderKnowledgeHealth(allNotes);
         stats.replaceChildren(
             createInsightsStatCard({
                 label: 'Learning streak',
@@ -4352,6 +4977,7 @@ function renderInsightsView(allNotes = Storage.getAll()) {
     summary.textContent = state.isPatternAnalysisLoading && !state.patternAnalysisError
         ? 'Refreshing topic coverage, streaks, and weekly activity.'
         : `Based on ${formatCountLabel(noteCount, 'saved item')}, not just the current search results.`;
+    renderKnowledgeHealth(allNotes);
 
     stats.replaceChildren(
         createInsightsStatCard({
@@ -6797,6 +7423,8 @@ function renderHomePage() {
 
                             <span id="insights-status" class="insights-status" aria-live="polite">Analyzing patterns...</span>
                         </div>
+
+                        <section id="knowledge-health" class="knowledge-health" aria-live="polite"></section>
 
                         <div id="insights-stats" class="insights-stats" aria-live="polite"></div>
 

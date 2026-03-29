@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `phase5-insights`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `23`
+- Completed tasks: `24`
 - Completed issues: `2`
 
 ## Implemented
@@ -40,13 +40,14 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `p4-pdf`: PDF upload and extraction
 - `p5-patterns`: Learning pattern analysis
 - `p5-reminders`: Smart revisit reminders
+- `p5-health`: Knowledge health score
 
 ## Recent Changes
+- `22c31d6 evolve(p5-reminders): Smart revisit reminders`
 - `5845a08 evolve(p5-patterns): Learning pattern analysis`
 - `844f4ee evolve(p4-pdf): PDF upload and extraction`
 - `00edd22 evolve(p4-image): Image upload and OCR`
 - `5e2f131 evolve(p4-voice): Voice note capture`
-- `fc150d9 fix(issue-3): Replace remaining OpenAI usage with Gemini across the repo`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
@@ -54,7 +55,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
 - Next manifest task candidate: `p2-key-insights` in phase `phase2-intelligence` — Key insight extraction
 - Next manifest task candidate: `p2-chrome-extension` in phase `phase2-intelligence` — Chrome extension scaffold
-- Next manifest task candidate: `p5-health` in phase `phase5-insights` — Knowledge health score
+- Next manifest task candidate: `p6-supabase` in phase `phase6-collaboration` — Migrate to Supabase
 
 ## Resolved Issues
 - `#2`
