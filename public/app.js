@@ -1,6 +1,12 @@
 const STORAGE_KEY = 'kh-notes';
+const THEME_STORAGE_KEY = 'kh-theme';
+const THEME_COLORS = {
+    light: '#f3f7fb',
+    dark: '#071018'
+};
 const app = document.querySelector('#app');
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
 const state = {
     notes: [],
@@ -8,7 +14,9 @@ const state = {
     feedback: '',
     captureAutoSummarize: false,
     isSavingNote: false,
-    noteUi: {}
+    noteUi: {},
+    themePreference: readThemePreference(),
+    activeTheme: 'light'
 };
 
 class KnowledgeHubStorage {
@@ -153,6 +161,81 @@ class KnowledgeHubStorage {
 
 const Storage = new KnowledgeHubStorage();
 
+function readThemePreference() {
+    try {
+        const storedValue = localStorage.getItem(THEME_STORAGE_KEY);
+
+        if (storedValue === 'light' || storedValue === 'dark') {
+            return storedValue;
+        }
+    } catch (error) {
+        console.error('Failed to read theme preference.', error);
+    }
+
+    return 'system';
+}
+
+function getActiveTheme() {
+    return state.themePreference === 'system'
+        ? (themeMediaQuery.matches ? 'dark' : 'light')
+        : state.themePreference;
+}
+
+function updateThemeMetaColor(theme) {
+    const themeColorElement = document.querySelector('#theme-color');
+
+    if (themeColorElement) {
+        themeColorElement.setAttribute('content', THEME_COLORS[theme]);
+    }
+}
+
+function updateThemeToggle() {
+    const themeToggle = document.querySelector('#theme-toggle');
+    const themeToggleValue = document.querySelector('#theme-toggle-value');
+
+    if (!themeToggle || !themeToggleValue) {
+        return;
+    }
+
+    const activeTheme = getActiveTheme();
+    const nextTheme = activeTheme === 'dark' ? 'light' : 'dark';
+    const themeLabel = activeTheme === 'dark' ? 'Dark mode' : 'Light mode';
+
+    themeToggleValue.textContent = themeLabel;
+    themeToggle.setAttribute('aria-label', `Switch to ${nextTheme} mode`);
+    themeToggle.setAttribute('aria-pressed', String(activeTheme === 'dark'));
+    themeToggle.title = `Switch to ${nextTheme} mode`;
+}
+
+function applyThemePreference() {
+    const activeTheme = getActiveTheme();
+
+    state.activeTheme = activeTheme;
+
+    if (state.themePreference === 'system') {
+        document.documentElement.removeAttribute('data-theme');
+    } else {
+        document.documentElement.setAttribute('data-theme', state.themePreference);
+    }
+
+    updateThemeMetaColor(activeTheme);
+    updateThemeToggle();
+}
+
+function toggleThemePreference() {
+    const nextTheme = getActiveTheme() === 'dark' ? 'light' : 'dark';
+
+    state.themePreference = nextTheme;
+
+    try {
+        localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    } catch (error) {
+        console.error('Failed to save theme preference.', error);
+    }
+
+    applyThemePreference();
+}
+
 function createNoteModel(note = {}, overrides = {}) {
     if (!note || typeof note !== 'object') {
         return null;
@@ -238,6 +321,35 @@ function formatRelativeTime(dateValue) {
     }
 
     return 'Just now';
+}
+
+function formatCountLabel(count, singular, plural = `${singular}s`) {
+    return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function collectKnowledgeMetrics(notes) {
+    const uniqueTags = new Set();
+    let linkCount = 0;
+    let summaryCount = 0;
+
+    notes.forEach((note) => {
+        if (note.type === 'link') {
+            linkCount += 1;
+        }
+
+        if (note.summary) {
+            summaryCount += 1;
+        }
+
+        note.tags.forEach((tag) => uniqueTags.add(tag.toLowerCase()));
+    });
+
+    return {
+        totalCount: notes.length,
+        linkCount,
+        summaryCount,
+        tagCount: uniqueTags.size
+    };
 }
 
 function parseTags(value) {
@@ -335,6 +447,68 @@ function createTagPill(tag) {
     return pill;
 }
 
+function createEmptyState(query) {
+    const emptyState = document.createElement('div');
+    const title = document.createElement('p');
+    const copy = document.createElement('p');
+    const trimmedQuery = query.trim();
+
+    emptyState.className = 'empty-state';
+    title.className = 'empty-state-title';
+    copy.className = 'empty-state-copy';
+
+    if (trimmedQuery) {
+        title.textContent = 'No matching notes';
+        copy.textContent = 'Try a different keyword or clear the search to return to your full library.';
+    } else {
+        title.textContent = 'Start building your hub';
+        copy.textContent = 'Capture a thought, paste a link, or save an idea to create your first card.';
+    }
+
+    emptyState.append(title, copy);
+
+    return emptyState;
+}
+
+function syncOverview(allNotes) {
+    const metrics = collectKnowledgeMetrics(allNotes);
+    const totalMetric = document.querySelector('#metric-total');
+    const linkMetric = document.querySelector('#metric-links');
+    const summaryMetric = document.querySelector('#metric-summaries');
+    const tagMetric = document.querySelector('#metric-tags');
+    const summaryElement = document.querySelector('#notes-summary');
+    const resultsPill = document.querySelector('#notes-results-pill');
+    const trimmedQuery = state.query.trim();
+
+    if (totalMetric) {
+        totalMetric.textContent = String(metrics.totalCount);
+    }
+
+    if (linkMetric) {
+        linkMetric.textContent = String(metrics.linkCount);
+    }
+
+    if (summaryMetric) {
+        summaryMetric.textContent = String(metrics.summaryCount);
+    }
+
+    if (tagMetric) {
+        tagMetric.textContent = String(metrics.tagCount);
+    }
+
+    if (resultsPill) {
+        resultsPill.textContent = trimmedQuery
+            ? `${formatCountLabel(state.notes.length, 'match')}`
+            : `${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}`;
+    }
+
+    if (summaryElement) {
+        summaryElement.textContent = trimmedQuery
+            ? `Showing ${formatCountLabel(state.notes.length, 'result')} for "${trimmedQuery}".`
+            : `${formatCountLabel(metrics.totalCount, 'saved item')} including ${formatCountLabel(metrics.linkCount, 'link')}, ${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}, and ${formatCountLabel(metrics.tagCount, 'active tag')}.`;
+    }
+}
+
 function createNoteCard(note) {
     const article = document.createElement('article');
     const topRow = document.createElement('div');
@@ -342,7 +516,7 @@ function createNoteCard(note) {
     const title = document.createElement('h2');
     const meta = document.createElement('div');
     const typeLabel = document.createElement('span');
-    const timeLabel = document.createElement('span');
+    const timeLabel = document.createElement('time');
     const actions = document.createElement('div');
     const summarizeButton = document.createElement('button');
     const deleteButton = document.createElement('button');
@@ -362,8 +536,11 @@ function createNoteCard(note) {
     title.textContent = note.title || (note.type === 'link' ? 'Saved link' : 'Untitled note');
 
     meta.className = 'note-meta';
+    typeLabel.className = 'note-type';
+    timeLabel.className = 'note-time';
     typeLabel.textContent = note.type === 'link' ? 'Link' : 'Note';
     timeLabel.textContent = formatRelativeTime(note.createdAt);
+    timeLabel.dateTime = note.createdAt;
     meta.append(typeLabel, timeLabel);
 
     actions.className = 'note-actions';
@@ -374,6 +551,7 @@ function createNoteCard(note) {
         summarizeButton.dataset.noteId = note.id;
         summarizeButton.disabled = uiState.isSummarizing;
         summarizeButton.setAttribute('aria-label', `Summarize ${note.title || 'note'}`);
+        summarizeButton.setAttribute('aria-busy', String(uiState.isSummarizing));
 
         if (uiState.isSummarizing) {
             const spinner = document.createElement('span');
@@ -381,10 +559,17 @@ function createNoteCard(note) {
 
             spinner.className = 'button-spinner';
             spinner.setAttribute('aria-hidden', 'true');
-            label.textContent = 'Summarizing';
+            label.textContent = 'Summarizing...';
             summarizeButton.append(spinner, label);
         } else {
-            summarizeButton.textContent = 'Summarize';
+            const icon = document.createElement('span');
+            const label = document.createElement('span');
+
+            icon.className = 'note-summarize-icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.textContent = 'AI';
+            label.textContent = 'Summarize';
+            summarizeButton.append(icon, label);
         }
 
         actions.append(summarizeButton);
@@ -515,6 +700,7 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
 
     let noteToSave = nextNote;
     let successMessage = 'Saved.';
+    let summaryErrorMessage = '';
 
     try {
         if (state.captureAutoSummarize && nextNote.content) {
@@ -529,9 +715,10 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
         }
     } catch (error) {
         console.error('Failed to summarize before saving note.', error);
-        successMessage = `Saved without summary. ${
-            error instanceof Error ? error.message : 'Could not summarize this note right now.'
-        }`;
+        summaryErrorMessage = error instanceof Error
+            ? error.message
+            : 'Could not summarize this note right now.';
+        successMessage = `Saved without summary. ${summaryErrorMessage}`;
     }
 
     try {
@@ -540,6 +727,15 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
         if (!savedNote) {
             setFeedback('Could not save this note. Please try again.');
             return false;
+        }
+
+        if (summaryErrorMessage) {
+            setNoteUiState(savedNote.id, {
+                isSummarizing: false,
+                error: summaryErrorMessage
+            });
+        } else {
+            clearNoteUiState(savedNote.id);
         }
 
         clearCaptureInputs({ contentInput, urlInput, tagsInput });
@@ -556,16 +752,20 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
 function renderNotesList() {
     const notesList = document.querySelector('#notes-list');
 
+    if (!notesList) {
+        return;
+    }
+
+    const allNotes = Storage.getAll();
+
     state.notes = state.query.trim()
         ? Storage.search(state.query)
-        : Storage.getAll();
+        : allNotes;
+
+    syncOverview(allNotes);
 
     if (!state.notes.length) {
-        notesList.innerHTML = `
-            <div class="empty-state">
-                <p>No notes yet. Capture a thought, a link, or a quick insight to get started.</p>
-            </div>
-        `;
+        notesList.replaceChildren(createEmptyState(state.query));
         return;
     }
 
@@ -581,50 +781,104 @@ function renderNotesList() {
 function renderApp() {
     app.innerHTML = `
         <main class="shell">
-            <header class="hero">
-                <p class="eyebrow">Knowledge Hub</p>
-                <h1>Capture. Understand. Recall.</h1>
-                <p class="hero-copy">A focused place for notes, links, and ideas worth returning to.</p>
-            </header>
+            <div class="app-grid">
+                <section class="hero-grid">
+                    <header class="panel hero-panel">
+                        <div class="hero-topbar">
+                            <p class="eyebrow">Knowledge Hub</p>
+                            <button id="theme-toggle" class="theme-toggle" type="button">
+                                <span class="theme-toggle-label">Theme</span>
+                                <span id="theme-toggle-value" class="theme-toggle-value">Light mode</span>
+                            </button>
+                        </div>
+                        <h1>Capture what matters. Revisit it with clarity.</h1>
+                        <p class="hero-copy">A calm, modern workspace for notes, links, and AI summaries that stays readable in light and dark themes.</p>
 
-            <section class="panel capture-panel">
-                <label class="field">
-                    <span>Note</span>
-                    <textarea id="note-content" rows="6" placeholder="What did you just learn?"></textarea>
-                </label>
+                        <div class="hero-metrics" aria-label="Knowledge Hub overview">
+                            <article class="metric-card">
+                                <span class="metric-label">Saved items</span>
+                                <strong id="metric-total" class="metric-value">0</strong>
+                            </article>
 
-                <label class="field">
-                    <span>Link</span>
-                    <input id="note-url" type="url" placeholder="Paste a link (optional)">
-                </label>
+                            <article class="metric-card">
+                                <span class="metric-label">Saved links</span>
+                                <strong id="metric-links" class="metric-value">0</strong>
+                            </article>
 
-                <label class="field">
-                    <span>Tags</span>
-                    <input id="note-tags" type="text" placeholder="Add tags, comma separated">
-                </label>
+                            <article class="metric-card">
+                                <span class="metric-label">AI summaries</span>
+                                <strong id="metric-summaries" class="metric-value">0</strong>
+                            </article>
 
-                <label class="field field-toggle">
-                    <span>Summarize on save</span>
-                    <span class="toggle-control">
-                        <input id="note-auto-summarize" type="checkbox">
-                        <span class="toggle-copy">Create an AI summary when this note has content.</span>
-                    </span>
-                </label>
+                            <article class="metric-card">
+                                <span class="metric-label">Active tags</span>
+                                <strong id="metric-tags" class="metric-value">0</strong>
+                            </article>
+                        </div>
+                    </header>
 
-                <div class="capture-actions">
-                    <button id="save-note" class="primary-button" type="button">Save</button>
-                    <p id="capture-feedback" class="capture-feedback" aria-live="polite"></p>
-                </div>
-            </section>
+                    <section class="panel capture-panel">
+                        <div class="panel-header">
+                            <p class="panel-kicker">New entry</p>
+                            <div>
+                                <h2 class="panel-title">Save a note or link</h2>
+                                <p class="panel-copy">Drop in a thought, source, or quick reference. AI summaries stay optional and existing note behavior remains unchanged.</p>
+                            </div>
+                        </div>
 
-            <section class="panel notes-panel">
-                <label class="field search-field">
-                    <span>Search</span>
-                    <input id="notes-search" type="search" placeholder="Search your knowledge...">
-                </label>
+                        <div class="capture-grid">
+                            <label class="field field-note">
+                                <span>Note</span>
+                                <textarea id="note-content" rows="6" placeholder="What did you just learn?"></textarea>
+                            </label>
 
-                <div id="notes-list" class="notes-list" aria-live="polite"></div>
-            </section>
+                            <div class="field-row">
+                                <label class="field">
+                                    <span>Link</span>
+                                    <input id="note-url" type="url" placeholder="Paste a link (optional)">
+                                </label>
+
+                                <label class="field">
+                                    <span>Tags</span>
+                                    <input id="note-tags" type="text" placeholder="Add tags, comma separated">
+                                </label>
+                            </div>
+
+                            <label class="field field-toggle">
+                                <span>Summarize on save</span>
+                                <span class="toggle-control">
+                                    <input id="note-auto-summarize" type="checkbox">
+                                    <span class="toggle-copy">Create an AI summary when this note has content.</span>
+                                </span>
+                            </label>
+
+                            <div class="capture-actions">
+                                <button id="save-note" class="primary-button" type="button">Save</button>
+                                <p id="capture-feedback" class="capture-feedback" aria-live="polite"></p>
+                            </div>
+                        </div>
+                    </section>
+                </section>
+
+                <section class="panel notes-panel">
+                    <div class="notes-heading">
+                        <div class="notes-title-group">
+                            <p class="panel-kicker">Library</p>
+                            <h2 class="panel-title">Your saved knowledge</h2>
+                            <p id="notes-summary" class="notes-summary">Browse notes, links, and AI summaries from one place.</p>
+                        </div>
+
+                        <span id="notes-results-pill" class="results-pill">0 AI summaries</span>
+                    </div>
+
+                    <label class="field search-field">
+                        <span>Search</span>
+                        <input id="notes-search" type="search" placeholder="Search notes, links, and tags...">
+                    </label>
+
+                    <div id="notes-list" class="notes-list" aria-live="polite"></div>
+                </section>
+            </div>
         </main>
     `;
 
@@ -635,8 +889,15 @@ function renderApp() {
     const searchInput = document.querySelector('#notes-search');
     const saveButton = document.querySelector('#save-note');
     const notesList = document.querySelector('#notes-list');
+    const themeToggle = document.querySelector('#theme-toggle');
 
     autoSummarizeInput.checked = state.captureAutoSummarize;
+    searchInput.value = state.query;
+    applyThemePreference();
+
+    themeToggle.addEventListener('click', () => {
+        toggleThemePreference();
+    });
 
     saveButton.addEventListener('click', async () => {
         try {
@@ -695,5 +956,11 @@ function renderApp() {
 
     renderNotesList();
 }
+
+themeMediaQuery.addEventListener('change', () => {
+    if (state.themePreference === 'system') {
+        applyThemePreference();
+    }
+});
 
 renderApp();

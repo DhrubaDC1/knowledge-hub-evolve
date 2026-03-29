@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { fetchLinkMetadata } from './lib/fetch-link.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -92,6 +93,40 @@ async function handleSummarize(req, res) {
     }
 }
 
+async function handleFetchLink(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const url = typeof body.url === 'string' ? body.url.trim() : '';
+
+    if (!url) {
+        return sendJson(res, 400, { error: 'URL is required.' });
+    }
+
+    try {
+        const metadata = await fetchLinkMetadata(url);
+        return sendJson(res, 200, metadata);
+    } catch (error) {
+        return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : 'Failed to fetch URL metadata.'
+        });
+    }
+}
+
 async function handleStaticAsset(req, res, pathname) {
     const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
     const assetPath = path.resolve(PUBLIC_DIR, relativePath);
@@ -125,6 +160,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/summarize') {
         await handleSummarize(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/fetch-link') {
+        await handleFetchLink(req, res);
         return;
     }
 
