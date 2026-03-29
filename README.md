@@ -14,7 +14,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
 - Completed tasks: `11`
-- Completed issues: `0`
+- Completed issues: `1`
 
 ## Implemented
 - `mvp-capture-ui`: Capture interface
@@ -30,11 +30,11 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `mvp-tag-suggestions-ui`: Tag suggestions in capture form
 
 ## Recent Changes
+- `e94d291 evolve(mvp-tag-suggestions-ui): Tag suggestions in capture form`
 - `7df55f1 evolve(mvp-tag-suggestions-api): AI tag suggestions`
 - `f1f50f2 evolve(mvp-tags-ui): Tag system refinement`
 - `db8d951 evolve(mvp-search-ui): Semantic search interface`
 - `4ac94a5 evolve(mvp-semantic-search-api): Semantic search serverless function`
-- `c9ae9c4 evolve(mvp-link-save-flow): Link auto-fetch on save`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
@@ -43,6 +43,9 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Next manifest task candidate: `mvp-deploy-check` in phase `mvp` — Deployment verification
 - Next manifest task candidate: `p2-auto-tag` in phase `phase2-intelligence` — Auto-tag on save
 - Next manifest task candidate: `p2-related-notes` in phase `phase2-intelligence` — Related notes suggestions
+
+## Resolved Issues
+- `#2`
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)

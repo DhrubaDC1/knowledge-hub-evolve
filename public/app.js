@@ -1,12 +1,16 @@
 const STORAGE_KEY = 'kh-notes';
 const THEME_STORAGE_KEY = 'kh-theme';
 const THEME_COLORS = {
-    light: '#f3f7fb',
-    dark: '#071018'
+    light: '#f7f4ee',
+    dark: '#141412'
 };
 const SEARCH_DEBOUNCE_MS = 300;
 const TAG_SUGGESTIONS_DEBOUNCE_MS = 1000;
 const TAG_SUGGESTIONS_MIN_CONTENT_LENGTH = 20;
+const TAG_FILTER_TRANSITION_MS = 320;
+const SUMMARY_REVEAL_RESET_MS = 700;
+const UNTAGGED_FILTER_VALUE = '__untagged__';
+const UNTAGGED_FILTER_LABEL = 'untagged';
 const app = document.querySelector('#app');
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -30,8 +34,13 @@ const state = {
     resolvedSearchQuery: '',
     searchRequestToken: 0,
     searchDebounceTimer: null,
+    isFilteringByTag: false,
+    filterTransitionTimer: null,
     tagSuggestionsRequestToken: 0,
     tagSuggestionsDebounceTimer: null,
+    journal: null,
+    isJournalLoading: false,
+    journalError: '',
     themePreference: readThemePreference(),
     activeTheme: 'light'
 };
@@ -161,7 +170,7 @@ class KnowledgeHubStorage {
                 note.title,
                 note.content,
                 note.url,
-                note.tags.join(' ')
+                getSearchableTagText(note)
             ]
                 .join(' ')
                 .toLowerCase();
@@ -341,8 +350,60 @@ function formatRelativeTime(dateValue) {
     return 'Just now';
 }
 
+function formatJournalDate(dateValue) {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return new Intl.DateTimeFormat('en', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+    }).format(date);
+}
+
+function formatJournalTime(dateValue) {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return new Intl.DateTimeFormat('en', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    }).format(date);
+}
+
 function formatCountLabel(count, singular, plural = `${singular}s`) {
     return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function isUntaggedNote(note = {}) {
+    return !Array.isArray(note.tags) || note.tags.length === 0;
+}
+
+function isUntaggedFilterValue(value) {
+    return String(value || '') === UNTAGGED_FILTER_VALUE;
+}
+
+function getTagFilterLabel(value) {
+    return isUntaggedFilterValue(value)
+        ? UNTAGGED_FILTER_LABEL
+        : String(value || '');
+}
+
+function getActiveTagFilterLabel() {
+    return getTagFilterLabel(state.activeTagFilter);
+}
+
+function getSearchableTagText(note = {}) {
+    return isUntaggedNote(note)
+        ? UNTAGGED_FILTER_LABEL
+        : note.tags.join(' ');
 }
 
 function normalizeTag(tag) {
@@ -482,7 +543,7 @@ function buildNoteSearchText(note = {}) {
         note.title,
         note.content,
         note.url,
-        Array.isArray(note.tags) ? note.tags.join(' ') : ''
+        getSearchableTagText(note)
     ]
         .map((value) => String(value || '').trim().toLowerCase())
         .filter(Boolean)
@@ -493,9 +554,7 @@ function calculateLocalSearchScore(note, normalizedQuery, queryTerms) {
     const title = String(note.title || '').trim().toLowerCase();
     const content = String(note.content || '').trim().toLowerCase();
     const url = String(note.url || '').trim().toLowerCase();
-    const tags = Array.isArray(note.tags)
-        ? note.tags.map((tag) => String(tag).trim().toLowerCase()).join(' ')
-        : '';
+    const tags = getSearchableTagText(note).toLowerCase();
     let score = 0;
 
     if (title.includes(normalizedQuery)) {
@@ -613,6 +672,88 @@ function clearScheduledTagSuggestions() {
         window.clearTimeout(state.tagSuggestionsDebounceTimer);
         state.tagSuggestionsDebounceTimer = null;
     }
+}
+
+function clearTagFilterTransition() {
+    if (state.filterTransitionTimer) {
+        window.clearTimeout(state.filterTransitionTimer);
+        state.filterTransitionTimer = null;
+    }
+}
+
+function syncNotesPresentation(allNotes = state.notes) {
+    const notesPanel = document.querySelector('.notes-panel');
+    const notesList = document.querySelector('#notes-list');
+    const tagFilters = document.querySelector('#notes-tag-filters');
+    const searchInput = document.querySelector('#notes-search');
+    const isSearching = state.isSearching;
+    const isFiltering = state.isFilteringByTag;
+    const isEmpty = state.notes.length === 0;
+    const trimmedQuery = state.query.trim();
+    const hasSavedNotes = Array.isArray(allNotes) && allNotes.length > 0;
+    const emptyVariant = !hasSavedNotes && !trimmedQuery && !state.activeTagFilter
+        ? 'library'
+        : 'results';
+
+    if (notesPanel) {
+        notesPanel.classList.toggle('is-searching', isSearching);
+        notesPanel.classList.toggle('is-filtering', isFiltering);
+        notesPanel.classList.toggle('is-empty', isEmpty);
+        notesPanel.dataset.surfaceState = isSearching
+            ? 'searching'
+            : (isFiltering ? 'filtering' : (isEmpty ? emptyVariant : 'default'));
+    }
+
+    if (notesList) {
+        notesList.classList.toggle('is-searching', isSearching);
+        notesList.classList.toggle('is-empty', isEmpty);
+        notesList.classList.toggle('has-query', Boolean(trimmedQuery));
+        notesList.classList.toggle('has-active-filter', Boolean(state.activeTagFilter));
+        notesList.setAttribute('aria-busy', String(isSearching || isFiltering));
+
+        if (isEmpty) {
+            notesList.dataset.emptyVariant = emptyVariant;
+        } else {
+            delete notesList.dataset.emptyVariant;
+        }
+    }
+
+    if (tagFilters) {
+        tagFilters.classList.toggle('is-transitioning', isFiltering);
+        tagFilters.setAttribute('aria-busy', String(isFiltering));
+    }
+
+    if (searchInput) {
+        searchInput.setAttribute('aria-busy', String(isSearching));
+    }
+}
+
+function beginTagFilterTransition() {
+    clearTagFilterTransition();
+    state.isFilteringByTag = true;
+    syncNotesPresentation();
+
+    state.filterTransitionTimer = window.setTimeout(() => {
+        state.filterTransitionTimer = null;
+        state.isFilteringByTag = false;
+        syncNotesPresentation();
+    }, TAG_FILTER_TRANSITION_MS);
+}
+
+function scheduleSummaryRevealReset(noteId) {
+    window.setTimeout(() => {
+        const uiState = getNoteUiState(noteId);
+
+        if (!uiState.animateSummary) {
+            return;
+        }
+
+        setNoteUiState(noteId, { animateSummary: false });
+
+        if (!getNoteUiState(noteId).isSummarizing && !getNoteUiState(noteId).error) {
+            clearNoteUiState(noteId);
+        }
+    }, SUMMARY_REVEAL_RESET_MS);
 }
 
 function hasMeaningfulContentForTagSuggestions(content) {
@@ -807,6 +948,10 @@ function filterNotesByActiveTag(notes) {
         return notes;
     }
 
+    if (isUntaggedFilterValue(state.activeTagFilter)) {
+        return notes.filter((note) => isUntaggedNote(note));
+    }
+
     return notes.filter((note) => note.tags.includes(state.activeTagFilter));
 }
 
@@ -918,6 +1063,28 @@ async function requestLinkMetadata(url) {
     };
 }
 
+async function requestJournal() {
+    const response = await fetch('/api/journal');
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Journal API not found. Run the app with `npm run dev` so Vercel serves `/api/journal`.');
+        }
+
+        throw new Error(payload?.error || 'Could not load the journal right now.');
+    }
+
+    return payload && typeof payload === 'object' ? payload : null;
+}
+
 function setFeedback(message) {
     state.feedback = message;
     const feedbackElement = document.querySelector('#capture-feedback');
@@ -957,17 +1124,35 @@ function createCaptureTagPill(tag) {
     return pill;
 }
 
-function createTagFilterPill(tag) {
+function createTagFilterPill({ value, label, count, isMuted = false }) {
     const pill = document.createElement('button');
+    const labelElement = document.createElement('span');
+    const countBadge = document.createElement('span');
+    const filterLabel = String(label || '');
 
     pill.className = 'tag-filter-pill';
     pill.type = 'button';
-    pill.dataset.tag = tag;
-    pill.textContent = tag;
-    pill.setAttribute('aria-pressed', String(state.activeTagFilter === tag));
-    setTagTone(tag, pill);
+    pill.dataset.tag = value;
+    pill.setAttribute('aria-pressed', String(state.activeTagFilter === value));
+    pill.setAttribute('aria-label', `Filter notes by ${filterLabel} (${formatCountLabel(count, 'note')})`);
+    pill.title = `${filterLabel} • ${formatCountLabel(count, 'note')}`;
 
-    if (state.activeTagFilter === tag) {
+    if (isMuted) {
+        pill.classList.add('is-muted');
+    } else {
+        setTagTone(filterLabel, pill);
+    }
+
+    labelElement.className = 'tag-filter-pill-label';
+    labelElement.textContent = filterLabel;
+
+    countBadge.className = 'tag-filter-pill-count';
+    countBadge.textContent = String(count);
+    countBadge.setAttribute('aria-hidden', 'true');
+
+    pill.append(labelElement, countBadge);
+
+    if (state.activeTagFilter === value) {
         pill.classList.add('is-active');
     }
 
@@ -1113,13 +1298,36 @@ function renderTagFilters(notes) {
         return;
     }
 
-    const uniqueTags = getUniqueTags(notes);
+    const tagCounts = notes.reduce((counts, note) => {
+        note.tags.forEach((tag) => {
+            counts.set(tag, (counts.get(tag) || 0) + 1);
+        });
 
-    if (state.activeTagFilter && !uniqueTags.includes(state.activeTagFilter)) {
+        return counts;
+    }, new Map());
+    const tagFilterOptions = getUniqueTags(notes).map((tag) => ({
+        value: tag,
+        label: tag,
+        count: tagCounts.get(tag) || 0
+    }));
+    const untaggedCount = notes.reduce((count, note) => {
+        return count + (isUntaggedNote(note) ? 1 : 0);
+    }, 0);
+
+    if (untaggedCount > 0) {
+        tagFilterOptions.push({
+            value: UNTAGGED_FILTER_VALUE,
+            label: UNTAGGED_FILTER_LABEL,
+            count: untaggedCount,
+            isMuted: true
+        });
+    }
+
+    if (state.activeTagFilter && !tagFilterOptions.some(({ value }) => value === state.activeTagFilter)) {
         state.activeTagFilter = '';
     }
 
-    if (!uniqueTags.length) {
+    if (!tagFilterOptions.length) {
         tagFilters.replaceChildren();
         tagFilters.hidden = true;
         return;
@@ -1127,37 +1335,46 @@ function renderTagFilters(notes) {
 
     const fragment = document.createDocumentFragment();
 
-    uniqueTags.forEach((tag) => {
-        fragment.append(createTagFilterPill(tag));
+    tagFilterOptions.forEach((option) => {
+        fragment.append(createTagFilterPill(option));
     });
 
     tagFilters.hidden = false;
     tagFilters.replaceChildren(fragment);
 }
 
-function createEmptyState(query) {
+function createEmptyState(allNotes) {
     const emptyState = document.createElement('div');
     const title = document.createElement('p');
     const copy = document.createElement('p');
-    const trimmedQuery = query.trim();
+    const trimmedQuery = state.query.trim();
     const activeTagFilter = state.activeTagFilter;
+    const activeTagLabel = getActiveTagFilterLabel();
+    const hasSavedNotes = Array.isArray(allNotes) && allNotes.length > 0;
 
     emptyState.className = 'empty-state';
     title.className = 'empty-state-title';
     copy.className = 'empty-state-copy';
 
-    if (trimmedQuery || activeTagFilter) {
-        title.textContent = 'No matching notes';
+    if (!hasSavedNotes && !trimmedQuery && !activeTagFilter) {
+        emptyState.dataset.variant = 'library';
+        title.textContent = 'No notes yet. Capture your first idea above.';
+        copy.textContent = 'Save a note or link to start a calm, searchable library.';
+    } else {
+        emptyState.dataset.variant = 'results';
+        title.textContent = 'No results found.';
+
         if (trimmedQuery && activeTagFilter) {
-            copy.textContent = `Try a different keyword or clear the "${activeTagFilter}" filter to return more notes.`;
+            copy.textContent = `Try a different keyword or clear the "${activeTagLabel}" filter to return more notes.`;
         } else if (trimmedQuery) {
             copy.textContent = 'Try a different keyword or clear the search to return to your full library.';
+        } else if (activeTagFilter) {
+            copy.textContent = isUntaggedFilterValue(activeTagFilter)
+                ? 'There are no saved untagged notes yet.'
+                : `There are no saved notes tagged "${activeTagLabel}" yet.`;
         } else {
-            copy.textContent = `There are no saved notes tagged "${activeTagFilter}" yet.`;
+            copy.textContent = 'Capture a note or link to start filling your library.';
         }
-    } else {
-        title.textContent = 'Start building your hub';
-        copy.textContent = 'Capture a thought, paste a link, or save an idea to create your first card.';
     }
 
     emptyState.append(title, copy);
@@ -1175,9 +1392,16 @@ function syncOverview(allNotes) {
     const summaryElement = document.querySelector('#notes-summary');
     const searchStatusElement = document.querySelector('#notes-search-status');
     const resultsPill = document.querySelector('#notes-results-pill');
+    const notesCountElement = document.querySelector('#notes-count-indicator');
     const trimmedQuery = state.query.trim();
     const activeTagFilter = state.activeTagFilter;
-    const tagLabel = activeTagFilter ? ` tagged "${activeTagFilter}"` : '';
+    const activeTagLabel = getActiveTagFilterLabel();
+    const tagLabel = activeTagFilter
+        ? (isUntaggedFilterValue(activeTagFilter) ? ` in ${activeTagLabel} notes` : ` tagged "${activeTagLabel}"`)
+        : '';
+    const shownCountLabel = formatCountLabel(state.notes.length, 'note');
+    const totalCountLabel = formatCountLabel(metrics.totalCount, 'note');
+    const hasScopedResults = Boolean(trimmedQuery || activeTagFilter);
 
     if (totalMetric) {
         totalMetric.textContent = String(metrics.totalCount);
@@ -1198,7 +1422,25 @@ function syncOverview(allNotes) {
     if (notesTitle) {
         notesTitle.textContent = trimmedQuery
             ? 'Search results'
-            : (activeTagFilter ? 'Tagged notes' : 'Your saved knowledge');
+            : (activeTagFilter
+                ? (isUntaggedFilterValue(activeTagFilter) ? 'Untagged notes' : 'Tagged notes')
+                : 'Your saved knowledge');
+    }
+
+    if (notesCountElement) {
+        if (trimmedQuery && state.isSearching) {
+            notesCountElement.textContent = `Searching ${totalCountLabel}...`;
+        } else if (hasScopedResults) {
+            notesCountElement.textContent = `${shownCountLabel} of ${totalCountLabel}`;
+        } else {
+            notesCountElement.textContent = `${totalCountLabel} saved`;
+        }
+
+        notesCountElement.title = hasScopedResults
+            ? `${shownCountLabel} currently visible from ${totalCountLabel}.`
+            : `${totalCountLabel} currently saved in your library.`;
+        notesCountElement.classList.toggle('is-busy', trimmedQuery && state.isSearching);
+        notesCountElement.classList.toggle('has-context', hasScopedResults && !state.isSearching);
     }
 
     if (resultsPill) {
@@ -1209,6 +1451,8 @@ function syncOverview(allNotes) {
         } else {
             resultsPill.textContent = `${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}`;
         }
+
+        resultsPill.classList.toggle('is-busy', trimmedQuery && state.isSearching);
     }
 
     if (summaryElement) {
@@ -1219,20 +1463,25 @@ function syncOverview(allNotes) {
         } else if (trimmedQuery) {
             summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'result')} for "${trimmedQuery}"${tagLabel}.`;
         } else if (activeTagFilter) {
-            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'saved item')} tagged "${activeTagFilter}".`;
+            summaryElement.textContent = isUntaggedFilterValue(activeTagFilter)
+                ? `Showing ${formatCountLabel(state.notes.length, 'untagged note')}.`
+                : `Showing ${formatCountLabel(state.notes.length, 'saved item')} tagged "${activeTagLabel}".`;
         } else {
             summaryElement.textContent = `${formatCountLabel(metrics.totalCount, 'saved item')} including ${formatCountLabel(metrics.linkCount, 'link')}, ${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}, and ${formatCountLabel(metrics.tagCount, 'active tag')}.`;
         }
+
+        summaryElement.classList.toggle('is-busy', trimmedQuery && state.isSearching);
     }
 
     if (searchStatusElement) {
         searchStatusElement.textContent = trimmedQuery
             ? (state.isSearching ? 'Searching...' : state.searchStatusMessage)
-            : (activeTagFilter ? `Filter active: ${activeTagFilter}` : '');
+            : (activeTagFilter ? `Filter active: ${activeTagLabel}` : '');
+        searchStatusElement.classList.toggle('is-busy', trimmedQuery && state.isSearching);
     }
 }
 
-function createNoteCard(note) {
+function createNoteCard(note, index = 0) {
     const article = document.createElement('article');
     const topRow = document.createElement('div');
     const headingGroup = document.createElement('div');
@@ -1258,6 +1507,7 @@ function createNoteCard(note) {
         article.classList.add('note-card-link');
     }
     article.dataset.noteId = note.id;
+    article.style.setProperty('--note-index', String(Math.min(index, 7)));
 
     topRow.className = 'note-top';
     headingGroup.className = 'note-heading';
@@ -1362,6 +1612,9 @@ function createNoteCard(note) {
 
     if (note.summary) {
         summaryText.className = 'note-summary';
+        if (uiState.animateSummary) {
+            summaryText.classList.add('is-revealed');
+        }
         summaryText.textContent = note.summary;
         article.append(summaryText);
     }
@@ -1380,7 +1633,7 @@ function createNoteCard(note) {
     } else {
         const emptyTag = document.createElement('span');
         emptyTag.className = 'note-tag note-tag-muted';
-        emptyTag.textContent = 'untagged';
+        emptyTag.textContent = UNTAGGED_FILTER_LABEL;
         tags.append(emptyTag);
     }
 
@@ -1439,9 +1692,14 @@ async function summarizeNote(noteId) {
             throw new Error('Could not save the summary.');
         }
 
-        clearNoteUiState(noteId);
+        setNoteUiState(noteId, {
+            isSummarizing: false,
+            error: '',
+            animateSummary: true
+        });
         setFeedback('Summary added.');
         renderNotesList();
+        scheduleSummaryRevealReset(noteId);
         return true;
     } catch (error) {
         console.error('Failed to summarize note.', error);
@@ -1589,16 +1847,18 @@ function renderNotesList() {
     state.notes = getDisplayedNotes(allNotes);
 
     syncOverview(allNotes);
+    syncNotesPresentation(allNotes);
+    notesList.classList.toggle('has-results', state.notes.length > 0);
 
     if (!state.notes.length) {
-        notesList.replaceChildren(createEmptyState(state.query));
+        notesList.replaceChildren(createEmptyState(allNotes));
         return;
     }
 
     const fragment = document.createDocumentFragment();
 
-    state.notes.forEach((note) => {
-        fragment.append(createNoteCard(note));
+    state.notes.forEach((note, index) => {
+        fragment.append(createNoteCard(note, index));
     });
 
     notesList.replaceChildren(fragment);
@@ -1709,6 +1969,7 @@ function renderApp() {
                         <span>Search</span>
                         <input id="notes-search" type="search" placeholder="Search notes, links, and tags...">
                     </label>
+                    <p id="notes-count-indicator" class="notes-count-indicator" aria-live="polite">0 notes saved</p>
                     <div id="notes-tag-filters" class="tag-filter-bar" aria-label="Filter notes by tag" hidden></div>
                     <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
 
@@ -1853,6 +2114,7 @@ function renderApp() {
         state.activeTagFilter = state.activeTagFilter === target.dataset.tag
             ? ''
             : String(target.dataset.tag || '');
+        beginTagFilterTransition();
         renderNotesList();
     });
 

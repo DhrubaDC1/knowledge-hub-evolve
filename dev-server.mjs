@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fetchLinkMetadata } from './lib/fetch-link.js';
+import { readJournalData } from './lib/journal.js';
 import { searchNotes } from './lib/search.js';
 import { suggestTags } from './lib/suggest-tags.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
@@ -209,6 +210,29 @@ async function handleSuggestTags(req, res) {
     }
 }
 
+async function handleJournal(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use GET.' });
+    }
+
+    try {
+        const journal = await readJournalData();
+        return sendJson(res, 200, journal);
+    } catch (error) {
+        console.error('Failed to read journal.', error);
+        return sendJson(res, 500, {
+            error: error instanceof Error ? error.message : 'Failed to read journal.'
+        });
+    }
+}
+
 async function handleStaticAsset(req, res, pathname) {
     const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
     const assetPath = path.resolve(PUBLIC_DIR, relativePath);
@@ -257,6 +281,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/suggest-tags') {
         await handleSuggestTags(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/journal') {
+        await handleJournal(req, res);
         return;
     }
 
