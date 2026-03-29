@@ -11,8 +11,46 @@ const TAG_FILTER_TRANSITION_MS = 320;
 const SUMMARY_REVEAL_RESET_MS = 700;
 const RELATED_NOTES_MAX_RESULTS = 3;
 const RELATED_QUERY_MAX_LENGTH = 2400;
+const GRAPH_TEXT_FIELD_MAX_LENGTH = 1200;
+const GRAPH_MIN_EDGE_WEIGHT = 0.14;
+const GRAPH_MIN_SIMILARITY_SCORE = 0.18;
+const GRAPH_TAG_WEIGHT_SHARE = 0.55;
+const GRAPH_SIMILARITY_WEIGHT_SHARE = 0.45;
 const UNTAGGED_FILTER_VALUE = '__untagged__';
 const UNTAGGED_FILTER_LABEL = 'untagged';
+const GRAPH_STOP_WORDS = new Set([
+    'a',
+    'an',
+    'and',
+    'are',
+    'as',
+    'at',
+    'be',
+    'by',
+    'for',
+    'from',
+    'how',
+    'i',
+    'in',
+    'is',
+    'it',
+    'of',
+    'on',
+    'or',
+    'that',
+    'the',
+    'their',
+    'this',
+    'to',
+    'was',
+    'what',
+    'when',
+    'where',
+    'which',
+    'with',
+    'you',
+    'your'
+]);
 const app = document.querySelector('#app');
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -35,6 +73,10 @@ const state = {
     searchSource: '',
     searchStatusMessage: '',
     resolvedSearchQuery: '',
+    graphData: {
+        nodes: [],
+        edges: []
+    },
     searchRequestToken: 0,
     searchDebounceTimer: null,
     isFilteringByTag: false,
@@ -281,6 +323,7 @@ function createNoteModel(note = {}, overrides = {}) {
     const tags = normalizeTags(note.tags);
     const autoTags = normalizeTags(note.autoTags).filter((tag) => tags.includes(tag));
     const summary = typeof note.summary === 'string' ? note.summary.trim() : '';
+    const insights = normalizeInsights(note.insights);
 
     return {
         id: '',
@@ -290,6 +333,7 @@ function createNoteModel(note = {}, overrides = {}) {
         favicon,
         title,
         summary,
+        insights,
         tags,
         autoTags,
         createdAt: '',
@@ -443,6 +487,33 @@ function normalizeTags(value) {
     });
 
     return [...uniqueTags];
+}
+
+function normalizeInsights(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    const insights = [];
+    const seen = new Set();
+
+    value.forEach((entry) => {
+        if (typeof entry !== 'string') {
+            return;
+        }
+
+        const insight = entry.replace(/^\s*(?:[-*•]|\d+\.)\s*/, '').trim();
+        const normalizedInsight = insight.toLowerCase();
+
+        if (!insight || seen.has(normalizedInsight) || insights.length >= 3) {
+            return;
+        }
+
+        seen.add(normalizedInsight);
+        insights.push(insight);
+    });
+
+    return insights;
 }
 
 function serializeTags(tags) {
@@ -653,6 +724,218 @@ function createLocalSearchResults(query, notes) {
         })
         .map(({ note, score }) => ({ note, score }));
 }
+
+class GraphBuilder {
+    build(notes = []) {
+        const preparedNodes = this.prepareNodes(notes);
+
+        return {
+            nodes: preparedNodes.map(({ note }) => note),
+            edges: this.createEdges(preparedNodes)
+        };
+    }
+
+    prepareNodes(notes = []) {
+        return (Array.isArray(notes) ? notes : [])
+            .map((note) => this.prepareNode(note))
+            .filter(Boolean);
+    }
+
+    prepareNode(note = {}) {
+        const normalizedNote = createNoteModel(note, {
+            id: note?.id ? String(note.id) : '',
+            createdAt: note?.createdAt || new Date().toISOString(),
+            updatedAt: note?.updatedAt || note?.createdAt || new Date().toISOString()
+        });
+
+        if (!normalizedNote?.id) {
+            return null;
+        }
+
+        const textVector = this.createTextVector(normalizedNote);
+
+        return {
+            note: normalizedNote,
+            tagSet: new Set(normalizedNote.tags),
+            textVector,
+            textMagnitude: this.calculateVectorMagnitude(textVector)
+        };
+    }
+
+    createEdges(nodes = []) {
+        const edges = [];
+
+        for (let sourceIndex = 0; sourceIndex < nodes.length; sourceIndex += 1) {
+            for (let targetIndex = sourceIndex + 1; targetIndex < nodes.length; targetIndex += 1) {
+                const edge = this.createEdge(nodes[sourceIndex], nodes[targetIndex]);
+
+                if (edge) {
+                    edges.push(edge);
+                }
+            }
+        }
+
+        return edges;
+    }
+
+    createEdge(sourceNode, targetNode) {
+        if (!sourceNode?.note?.id || !targetNode?.note?.id) {
+            return null;
+        }
+
+        const tagWeight = this.calculateTagWeight(sourceNode, targetNode);
+        const similarityWeight = this.calculateSemanticSimilarity(sourceNode, targetNode);
+
+        if (!tagWeight && similarityWeight < GRAPH_MIN_SIMILARITY_SCORE) {
+            return null;
+        }
+
+        const weight = this.roundWeight(
+            (tagWeight * GRAPH_TAG_WEIGHT_SHARE) + (similarityWeight * GRAPH_SIMILARITY_WEIGHT_SHARE)
+        );
+
+        if (weight < GRAPH_MIN_EDGE_WEIGHT) {
+            return null;
+        }
+
+        return {
+            source: sourceNode.note.id,
+            target: targetNode.note.id,
+            weight
+        };
+    }
+
+    calculateTagWeight(sourceNode, targetNode) {
+        const sourceTags = sourceNode?.tagSet || new Set();
+        const targetTags = targetNode?.tagSet || new Set();
+
+        if (!sourceTags.size || !targetTags.size) {
+            return 0;
+        }
+
+        let sharedTagCount = 0;
+
+        sourceTags.forEach((tag) => {
+            if (targetTags.has(tag)) {
+                sharedTagCount += 1;
+            }
+        });
+
+        if (!sharedTagCount) {
+            return 0;
+        }
+
+        const denominator = Math.sqrt(sourceTags.size * targetTags.size);
+
+        return Math.min(1, sharedTagCount / denominator);
+    }
+
+    calculateSemanticSimilarity(sourceNode, targetNode) {
+        const sourceMagnitude = Number(sourceNode?.textMagnitude) || 0;
+        const targetMagnitude = Number(targetNode?.textMagnitude) || 0;
+
+        if (!sourceMagnitude || !targetMagnitude) {
+            return 0;
+        }
+
+        const sourceVector = sourceNode?.textVector;
+        const targetVector = targetNode?.textVector;
+        const smallerVector = sourceVector.size <= targetVector.size ? sourceVector : targetVector;
+        const largerVector = smallerVector === sourceVector ? targetVector : sourceVector;
+        let dotProduct = 0;
+
+        smallerVector.forEach((value, token) => {
+            if (largerVector.has(token)) {
+                dotProduct += value * largerVector.get(token);
+            }
+        });
+
+        return Math.min(1, dotProduct / (sourceMagnitude * targetMagnitude));
+    }
+
+    createTextVector(note = {}) {
+        const vector = new Map();
+
+        this.addTokens(vector, note.title, 3);
+        this.addTokens(vector, note.summary, 2.4);
+        this.addTokens(vector, Array.isArray(note.insights) ? note.insights.join(' ') : '', 2);
+        this.addTokens(vector, limitTextLength(note.content, GRAPH_TEXT_FIELD_MAX_LENGTH), 1.6);
+        this.addTokens(vector, this.extractUrlText(note.url), 1);
+
+        return vector;
+    }
+
+    addTokens(vector, value, weight) {
+        this.tokenize(value).forEach((token) => {
+            vector.set(token, (vector.get(token) || 0) + weight);
+        });
+    }
+
+    tokenize(value) {
+        const matches = String(value || '').toLowerCase().match(/[a-z0-9]+(?:['-][a-z0-9]+)*/g) || [];
+
+        return matches
+            .map((token) => this.normalizeToken(token))
+            .filter((token) => token.length > 1 && !GRAPH_STOP_WORDS.has(token));
+    }
+
+    normalizeToken(token) {
+        if (token.length > 4 && token.endsWith('ies')) {
+            return `${token.slice(0, -3)}y`;
+        }
+
+        if (token.length > 5 && token.endsWith('ing')) {
+            return token.slice(0, -3);
+        }
+
+        if (token.length > 4 && token.endsWith('ed')) {
+            return token.slice(0, -2);
+        }
+
+        if (token.length > 4 && token.endsWith('es')) {
+            return token.slice(0, -2);
+        }
+
+        if (token.length > 3 && token.endsWith('s')) {
+            return token.slice(0, -1);
+        }
+
+        return token;
+    }
+
+    extractUrlText(url) {
+        const trimmedUrl = String(url || '').trim();
+
+        if (!trimmedUrl) {
+            return '';
+        }
+
+        try {
+            const parsedUrl = new URL(trimmedUrl);
+
+            return `${parsedUrl.hostname} ${parsedUrl.pathname}`.replace(/[./_-]+/g, ' ');
+        } catch (error) {
+            return trimmedUrl;
+        }
+    }
+
+    calculateVectorMagnitude(vector) {
+        let total = 0;
+
+        vector.forEach((value) => {
+            total += value * value;
+        });
+
+        return Math.sqrt(total);
+    }
+
+    roundWeight(value) {
+        return Number(value.toFixed(4));
+    }
+}
+
+window.GraphBuilder = GraphBuilder;
+const graphBuilder = new GraphBuilder();
 
 function normalizeSearchScore(score, source = 'api') {
     const numericScore = Number(score);
@@ -1059,6 +1342,9 @@ function getNoteUiState(noteId) {
         isExpanded: false,
         isSummarizing: false,
         error: '',
+        isLoadingInsights: false,
+        insightsError: '',
+        insightsRequestToken: 0,
         isLoadingRelated: false,
         relatedError: '',
         relatedRequestToken: 0
@@ -1094,12 +1380,24 @@ function clearNoteUiState(noteId, options = {}) {
         nextUiState.isLoadingRelated = true;
     }
 
+    if (uiState.isLoadingInsights) {
+        nextUiState.isLoadingInsights = true;
+    }
+
     if (uiState.relatedError) {
         nextUiState.relatedError = uiState.relatedError;
     }
 
+    if (uiState.insightsError) {
+        nextUiState.insightsError = uiState.insightsError;
+    }
+
     if (uiState.relatedRequestToken) {
         nextUiState.relatedRequestToken = uiState.relatedRequestToken;
+    }
+
+    if (uiState.insightsRequestToken) {
+        nextUiState.insightsRequestToken = uiState.insightsRequestToken;
     }
 
     if (Object.keys(nextUiState).length) {
@@ -1166,6 +1464,110 @@ async function requestSummary(text) {
     return summary;
 }
 
+async function requestInsights({ text, summary }) {
+    const response = await fetch('/api/extract-insights', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ text, summary })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Insights API not found. Run the app with `npm run dev` so Vercel serves `/api/extract-insights`.');
+        }
+
+        throw new Error(payload?.error || 'Could not extract key insights right now.');
+    }
+
+    const insights = normalizeInsights(payload?.insights);
+
+    if (!insights.length) {
+        throw new Error('Could not extract key insights right now.');
+    }
+
+    return insights;
+}
+
+async function loadInsightsForNote(noteId, options = {}) {
+    const note = Storage.getById(noteId);
+    const uiState = getNoteUiState(noteId);
+
+    if (!note || !note.summary) {
+        return [];
+    }
+
+    if (!options.force && (note.insights.length || uiState.isLoadingInsights || uiState.insightsError)) {
+        return note.insights;
+    }
+
+    const requestToken = uiState.insightsRequestToken + 1;
+
+    setNoteUiState(noteId, {
+        isLoadingInsights: true,
+        insightsError: '',
+        insightsRequestToken: requestToken
+    });
+    renderNotesList();
+
+    try {
+        const insights = await requestInsights({
+            text: note.content,
+            summary: note.summary
+        });
+
+        if (getNoteUiState(noteId).insightsRequestToken !== requestToken) {
+            return [];
+        }
+
+        const updatedNote = Storage.update(noteId, { insights });
+
+        if (!updatedNote) {
+            throw new Error('Could not save key insights.');
+        }
+
+        setNoteUiState(noteId, {
+            isLoadingInsights: false,
+            insightsError: '',
+            insightsRequestToken: 0
+        });
+        renderNotesList();
+        return insights;
+    } catch (error) {
+        if (getNoteUiState(noteId).insightsRequestToken !== requestToken) {
+            return [];
+        }
+
+        console.error('Failed to load key insights.', error);
+        setNoteUiState(noteId, {
+            isLoadingInsights: false,
+            insightsError: error instanceof Error ? error.message : 'Could not extract key insights right now.',
+            insightsRequestToken: 0
+        });
+        renderNotesList();
+        return [];
+    }
+}
+
+function ensureVisibleInsights(notes = state.notes) {
+    notes.forEach((note) => {
+        const uiState = getNoteUiState(note.id);
+
+        if (note.summary && !note.insights.length && !uiState.isLoadingInsights && !uiState.insightsError) {
+            void loadInsightsForNote(note.id);
+        }
+    });
+}
+
 async function requestLinkMetadata(url) {
     const response = await fetch('/api/fetch-link', {
         method: 'POST',
@@ -1227,6 +1629,18 @@ function setFeedback(message) {
 
     if (feedbackElement) {
         feedbackElement.textContent = message;
+    }
+}
+
+function syncGraphData(notes) {
+    try {
+        state.graphData = graphBuilder.build(notes);
+    } catch (error) {
+        console.error('Failed to build note graph data.', error);
+        state.graphData = {
+            nodes: [],
+            edges: []
+        };
     }
 }
 
@@ -2008,6 +2422,10 @@ function createNoteCard(note, index = 0) {
     const linkPreview = document.createElement('div');
     const bodyText = document.createElement('p');
     const summaryText = document.createElement('p');
+    const insightsSection = document.createElement('section');
+    const insightsTitle = document.createElement('p');
+    const insightsList = document.createElement('ul');
+    const insightsStatus = document.createElement('p');
     const errorText = document.createElement('p');
     const tags = document.createElement('div');
     const uiState = getNoteUiState(note.id);
@@ -2153,6 +2571,37 @@ function createNoteCard(note, index = 0) {
         }
         summaryText.textContent = note.summary;
         article.append(summaryText);
+
+        insightsSection.className = 'note-insights';
+        insightsTitle.className = 'note-insights-title';
+        insightsTitle.textContent = 'Key insights';
+        insightsSection.append(insightsTitle);
+
+        if (note.insights.length) {
+            insightsList.className = 'note-insights-list';
+
+            note.insights.forEach((insight) => {
+                const item = document.createElement('li');
+
+                item.className = 'note-insight-item';
+                item.textContent = insight;
+                insightsList.append(item);
+            });
+
+            insightsSection.append(insightsList);
+        } else {
+            insightsStatus.className = 'note-insights-status';
+            insightsStatus.textContent = uiState.insightsError || 'Pulling out the strongest takeaways...';
+            insightsStatus.setAttribute('aria-live', 'polite');
+
+            if (uiState.insightsError) {
+                insightsStatus.classList.add('is-error');
+            }
+
+            insightsSection.append(insightsStatus);
+        }
+
+        article.append(insightsSection);
     }
 
     if (uiState.error) {
@@ -2348,6 +2797,7 @@ async function summarizeNote(noteId) {
         setFeedback('Summary added.');
         renderNotesList();
         scheduleSummaryRevealReset(noteId);
+        void loadInsightsForNote(noteId, { force: true });
         return true;
     } catch (error) {
         console.error('Failed to summarize note.', error);
@@ -2488,6 +2938,7 @@ function renderNotesList() {
     }
 
     const allNotes = Storage.getAll();
+    syncGraphData(allNotes);
     renderTagFilters(allNotes);
     state.notes = getDisplayedNotes(allNotes);
 
@@ -2508,6 +2959,7 @@ function renderNotesList() {
 
     notesList.replaceChildren(fragment);
     syncExpandedRelatedNotes();
+    ensureVisibleInsights(state.notes);
 }
 
 function getCurrentPage() {

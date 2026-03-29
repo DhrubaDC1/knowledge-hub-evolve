@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { fetchLinkMetadata } from './lib/fetch-link.js';
 import { readJournalData } from './lib/journal.js';
+import { createExternalNote } from './lib/save-external.js';
 import { searchNotes } from './lib/search.js';
 import { suggestTags } from './lib/suggest-tags.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
@@ -233,6 +234,40 @@ async function handleJournal(req, res) {
     }
 }
 
+async function handleSaveExternal(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    try {
+        const note = createExternalNote(body);
+
+        return sendJson(res, 200, {
+            ok: true,
+            note
+        });
+    } catch (error) {
+        console.error('Failed to process external capture.', error);
+
+        return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : 'Failed to process external capture.'
+        });
+    }
+}
+
 async function handleStaticAsset(req, res, pathname) {
     const isAppRoute = pathname === '/' || pathname === '/journal' || pathname === '/journal/';
     const relativePath = isAppRoute ? 'index.html' : pathname.replace(/^\/+/, '');
@@ -287,6 +322,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/journal') {
         await handleJournal(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/save-external') {
+        await handleSaveExternal(req, res);
         return;
     }
 

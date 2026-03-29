@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Knowledge Hub Capture",
+  "version": "0.1.0",
+  "description": "Capture the current page into Knowledge Hub.",
+  "permissions": [
+    "activeTab"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:3000/*",
+    "http://localhost:3000/*"
+  ],
+  "action": {
+    "default_title": "Save to Knowledge Hub",
+    "default_popup": "popup.html"
+  }
+}
