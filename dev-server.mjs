@@ -9,6 +9,7 @@ import { fetchLinkMetadata } from './lib/fetch-link.js';
 import { readJournalData } from './lib/journal.js';
 import { clusterNotesByOverlappingTags } from './public/cluster.js';
 import { createExternalNote } from './lib/save-external.js';
+import { extractTextFromImage } from './lib/process-image.js';
 import { searchNotes } from './lib/search.js';
 import { suggestTags } from './lib/suggest-tags.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
@@ -246,6 +247,46 @@ async function handleSuggestTags(req, res) {
     }
 }
 
+async function handleProcessImage(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64.trim() : '';
+    const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim() : '';
+
+    if (!imageBase64) {
+        return sendJson(res, 400, { error: 'Image data is required.' });
+    }
+
+    if (!mimeType) {
+        return sendJson(res, 400, { error: 'Image type is required.' });
+    }
+
+    try {
+        const text = await extractTextFromImage({ imageBase64, mimeType });
+        return sendJson(res, 200, { text });
+    } catch (error) {
+        console.error('Failed to process image.', error);
+        return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : 'Failed to process image.'
+        });
+    }
+}
+
 async function handleJournal(req, res) {
     setCorsHeaders(res);
 
@@ -357,6 +398,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/suggest-tags') {
         await handleSuggestTags(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/process-image') {
+        await handleProcessImage(req, res);
         return;
     }
 

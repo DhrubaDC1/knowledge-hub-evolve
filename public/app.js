@@ -10,6 +10,12 @@ const SEARCH_DEBOUNCE_MS = 300;
 const TAG_SUGGESTIONS_DEBOUNCE_MS = 1000;
 const TAG_SUGGESTIONS_MIN_CONTENT_LENGTH = 20;
 const SPEECH_RECOGNITION_MAX_DURATION_MS = 5 * 60 * 1000;
+const CAPTURE_IMAGE_MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024;
+const CAPTURE_IMAGE_SUPPORTED_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp'
+]);
 const TAG_FILTER_TRANSITION_MS = 320;
 const SUMMARY_REVEAL_RESET_MS = 700;
 const RELATED_NOTES_MAX_RESULTS = 3;
@@ -63,6 +69,20 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto
 const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 const SpeechRecognitionConstructor = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
+function createEmptyCaptureImageState() {
+    return {
+        fileName: '',
+        mimeType: '',
+        dataUrl: '',
+        extractedText: '',
+        isProcessing: false,
+        isDragActive: false,
+        error: '',
+        statusMessage: '',
+        requestToken: 0
+    };
+}
+
 const state = {
     notes: [],
     query: '',
@@ -80,6 +100,7 @@ const state = {
     searchResultScores: {},
     searchSource: '',
     searchStatusMessage: '',
+    captureImage: createEmptyCaptureImageState(),
     resolvedSearchQuery: '',
     activeLibraryView: 'list',
     clusterData: createEmptyClusterData(),
@@ -631,6 +652,337 @@ async function toggleSpeechCapture() {
     }
 
     startSpeechCapture();
+}
+
+function formatFileSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return '0 B';
+    }
+
+    if (bytes >= 1024 * 1024) {
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    if (bytes >= 1024) {
+        return `${Math.round(bytes / 1024)} KB`;
+    }
+
+    return `${bytes} B`;
+}
+
+function getCaptureImageControls() {
+    return {
+        fileInput: document.querySelector('#note-image-input'),
+        dropzone: document.querySelector('#capture-image-dropzone'),
+        fileName: document.querySelector('#capture-image-file-name'),
+        status: document.querySelector('#capture-image-status'),
+        previewWrap: document.querySelector('#capture-image-preview-wrap'),
+        previewImage: document.querySelector('#capture-image-preview'),
+        extractButton: document.querySelector('#capture-image-process'),
+        clearButton: document.querySelector('#capture-image-clear'),
+        insertButton: document.querySelector('#capture-image-insert'),
+        extractedWrap: document.querySelector('#capture-image-results'),
+        extractedText: document.querySelector('#capture-image-text')
+    };
+}
+
+function getDefaultCaptureImageMessage() {
+    return `Drop a PNG, JPG, or WebP image here, or choose one to extract text. Max ${formatFileSize(CAPTURE_IMAGE_MAX_FILE_SIZE_BYTES)}.`;
+}
+
+function getCaptureImageStatusMessage() {
+    if (state.captureImage.error) {
+        return state.captureImage.error;
+    }
+
+    if (state.captureImage.isProcessing) {
+        return state.captureImage.fileName
+            ? `Extracting text from ${state.captureImage.fileName}...`
+            : 'Extracting text from the image...';
+    }
+
+    if (state.captureImage.statusMessage) {
+        return state.captureImage.statusMessage;
+    }
+
+    if (state.captureImage.dataUrl) {
+        return 'Image ready. Extract text when you’re ready.';
+    }
+
+    return getDefaultCaptureImageMessage();
+}
+
+function renderCaptureImage(controls = getCaptureImageControls()) {
+    const {
+        fileInput,
+        dropzone,
+        fileName,
+        status,
+        previewWrap,
+        previewImage,
+        extractButton,
+        clearButton,
+        insertButton,
+        extractedWrap,
+        extractedText
+    } = controls;
+    const hasImage = Boolean(state.captureImage.dataUrl);
+    const hasExtractedText = Boolean(state.captureImage.extractedText);
+
+    if (dropzone) {
+        dropzone.classList.toggle('is-active', state.captureImage.isDragActive);
+        dropzone.classList.toggle('has-image', hasImage);
+        dropzone.classList.toggle('is-processing', state.captureImage.isProcessing);
+    }
+
+    if (status) {
+        status.textContent = getCaptureImageStatusMessage();
+        status.classList.toggle('is-error', Boolean(state.captureImage.error));
+    }
+
+    if (fileName) {
+        fileName.hidden = !hasImage;
+        fileName.textContent = state.captureImage.fileName;
+    }
+
+    if (previewWrap) {
+        previewWrap.hidden = !hasImage;
+    }
+
+    if (previewImage) {
+        previewImage.hidden = !hasImage;
+        previewImage.src = hasImage ? state.captureImage.dataUrl : '';
+        previewImage.alt = state.captureImage.fileName
+            ? `Preview of ${state.captureImage.fileName}`
+            : 'Selected upload preview';
+    }
+
+    if (extractButton) {
+        extractButton.disabled = !hasImage || state.captureImage.isProcessing;
+        extractButton.textContent = state.captureImage.isProcessing ? 'Extracting...' : 'Extract text';
+    }
+
+    if (clearButton) {
+        clearButton.hidden = !hasImage;
+        clearButton.disabled = state.captureImage.isProcessing;
+    }
+
+    if (insertButton) {
+        insertButton.hidden = !hasExtractedText;
+        insertButton.disabled = !hasExtractedText || state.captureImage.isProcessing;
+    }
+
+    if (extractedWrap) {
+        extractedWrap.hidden = !hasExtractedText;
+    }
+
+    if (extractedText) {
+        extractedText.value = state.captureImage.extractedText;
+    }
+
+    if (fileInput && !hasImage && fileInput.value) {
+        fileInput.value = '';
+    }
+}
+
+function setCaptureImageState(patch = {}, controls = getCaptureImageControls()) {
+    state.captureImage = {
+        ...state.captureImage,
+        ...patch
+    };
+    renderCaptureImage(controls);
+}
+
+function resetCaptureImageState(controls = getCaptureImageControls()) {
+    state.captureImage = createEmptyCaptureImageState();
+    renderCaptureImage(controls);
+}
+
+function isSupportedCaptureImageFile(file) {
+    return file instanceof File && CAPTURE_IMAGE_SUPPORTED_TYPES.has(String(file.type || '').toLowerCase());
+}
+
+function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = () => {
+            resolve(typeof reader.result === 'string' ? reader.result : '');
+        };
+
+        reader.onerror = () => {
+            reject(reader.error || new Error('Could not read that image.'));
+        };
+
+        reader.readAsDataURL(file);
+    });
+}
+
+async function selectCaptureImage(file, controls = getCaptureImageControls()) {
+    if (!(file instanceof File)) {
+        setCaptureImageState({
+            isDragActive: false,
+            error: 'Choose an image file to continue.'
+        }, controls);
+        return false;
+    }
+
+    if (!isSupportedCaptureImageFile(file)) {
+        setCaptureImageState({
+            isDragActive: false,
+            error: 'Use a PNG, JPG, or WebP image.',
+            statusMessage: ''
+        }, controls);
+        return false;
+    }
+
+    if (file.size > CAPTURE_IMAGE_MAX_FILE_SIZE_BYTES) {
+        setCaptureImageState({
+            isDragActive: false,
+            error: `Image must be ${formatFileSize(CAPTURE_IMAGE_MAX_FILE_SIZE_BYTES)} or smaller.`,
+            statusMessage: ''
+        }, controls);
+        return false;
+    }
+
+    try {
+        const dataUrl = await readFileAsDataUrl(file);
+
+        setCaptureImageState({
+            fileName: file.name || 'Uploaded image',
+            mimeType: String(file.type || '').toLowerCase(),
+            dataUrl,
+            extractedText: '',
+            isProcessing: false,
+            isDragActive: false,
+            error: '',
+            statusMessage: `${file.name || 'Image'} ready. Extract text when you’re ready.`,
+            requestToken: 0
+        }, controls);
+
+        return true;
+    } catch (error) {
+        console.error('Failed to read selected image.', error);
+        setCaptureImageState({
+            isDragActive: false,
+            error: 'Could not read that image. Try another file.',
+            statusMessage: ''
+        }, controls);
+        return false;
+    }
+}
+
+function getBase64PayloadFromDataUrl(dataUrl) {
+    const match = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+
+    if (!match) {
+        return '';
+    }
+
+    return match[2].trim();
+}
+
+async function requestImageTextExtraction({ dataUrl, mimeType }) {
+    const imageBase64 = getBase64PayloadFromDataUrl(dataUrl);
+
+    if (!imageBase64) {
+        throw new Error('Could not prepare that image for processing.');
+    }
+
+    const response = await fetch('/api/process-image', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            imageBase64,
+            mimeType
+        })
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Image processing API not found. Run the app with `npm run dev` so Vercel serves `/api/process-image`.');
+        }
+
+        throw new Error(payload?.error || 'Could not extract text from that image right now.');
+    }
+
+    return typeof payload?.text === 'string' ? payload.text.trim() : '';
+}
+
+async function processCaptureImage(controls = getCaptureImageControls()) {
+    if (!state.captureImage.dataUrl || state.captureImage.isProcessing) {
+        return false;
+    }
+
+    const requestToken = state.captureImage.requestToken + 1;
+
+    setCaptureImageState({
+        isProcessing: true,
+        error: '',
+        statusMessage: '',
+        requestToken
+    }, controls);
+
+    try {
+        const text = await requestImageTextExtraction({
+            dataUrl: state.captureImage.dataUrl,
+            mimeType: state.captureImage.mimeType
+        });
+
+        if (state.captureImage.requestToken !== requestToken) {
+            return false;
+        }
+
+        const hasText = Boolean(text);
+
+        setCaptureImageState({
+            isProcessing: false,
+            extractedText: text,
+            error: '',
+            statusMessage: hasText
+                ? 'Text extracted. Review it below or insert it into your note.'
+                : 'No readable text found in that image.'
+        }, controls);
+
+        setFeedback(hasText ? 'Text extracted from the image.' : 'No readable text found in that image.');
+        return true;
+    } catch (error) {
+        if (state.captureImage.requestToken !== requestToken) {
+            return false;
+        }
+
+        console.error('Failed to process capture image.', error);
+        setCaptureImageState({
+            isProcessing: false,
+            extractedText: '',
+            error: error instanceof Error ? error.message : 'Could not extract text from that image right now.',
+            statusMessage: ''
+        }, controls);
+        setFeedback('Could not extract text from that image.');
+        return false;
+    }
+}
+
+function insertCaptureImageText(contentInput, controls = getCaptureImageControls()) {
+    const extractedText = String(state.captureImage.extractedText || '').trim();
+
+    if (!(contentInput instanceof HTMLTextAreaElement) || !extractedText) {
+        return false;
+    }
+
+    contentInput.value = mergeTranscriptIntoContent(contentInput.value, extractedText);
+    contentInput.focus();
+    contentInput.setSelectionRange(contentInput.value.length, contentInput.value.length);
+    contentInput.dispatchEvent(new Event('input', { bubbles: true }));
+    setCaptureImageState({
+        error: '',
+        statusMessage: 'Extracted text added to your note.'
+    }, controls);
+    setFeedback('Extracted text added to the note.');
+    return true;
 }
 
 function updateThemeToggle() {
@@ -4560,7 +4912,8 @@ function clearCaptureInputs({
     tagsTextInput,
     tagsList,
     suggestionsWrap,
-    suggestionsList
+    suggestionsList,
+    imageControls
 }) {
     contentInput.value = '';
     urlInput.value = '';
@@ -4569,6 +4922,7 @@ function clearCaptureInputs({
     tagsTextInput.value = '';
     renderCaptureTagsInput({ tagsInput, tagsTextInput, tagsList });
     resetCaptureTagSuggestions({ suggestionsWrap, suggestionsList });
+    resetCaptureImageState(imageControls);
 }
 
 function setSaveButtonLabel(label, saveButton) {
@@ -4695,7 +5049,8 @@ async function saveNote({
     tagsList,
     suggestionsWrap,
     suggestionsList,
-    saveButton
+    saveButton,
+    imageControls
 }) {
     if (speechState.isRecording) {
         await stopSpeechCapture('save');
@@ -4795,7 +5150,8 @@ async function saveNote({
             tagsTextInput,
             tagsList,
             suggestionsWrap,
-            suggestionsList
+            suggestionsList,
+            imageControls
         });
         invalidateRelatedNotesCache();
         contentInput.focus();
@@ -4957,6 +5313,45 @@ function renderHomePage() {
                                 </div>
                             </label>
 
+                            <section class="field field-image" aria-labelledby="capture-image-label">
+                                <div class="field-label-row">
+                                    <span id="capture-image-label">Image text extraction</span>
+                                    <input id="note-image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                                    <button id="capture-image-process" class="secondary-button" type="button" disabled>Extract text</button>
+                                </div>
+
+                                <div
+                                    id="capture-image-dropzone"
+                                    class="image-dropzone"
+                                    aria-describedby="capture-image-status"
+                                >
+                                    <div class="image-dropzone-copy">
+                                        <p class="image-dropzone-title">Drop an image here</p>
+                                        <p class="image-dropzone-text">PNG, JPG, or WebP up to 3 MB. A preview appears here before OCR runs.</p>
+                                    </div>
+
+                                    <div class="image-dropzone-actions">
+                                        <button id="capture-image-select" class="secondary-button" type="button">Choose image</button>
+                                        <button id="capture-image-clear" class="ghost-button" type="button" hidden>Remove</button>
+                                    </div>
+                                </div>
+
+                                <p id="capture-image-status" class="image-upload-status" aria-live="polite">Drop a PNG, JPG, or WebP image here, or choose one to extract text. Max 3.0 MB.</p>
+                                <p id="capture-image-file-name" class="image-file-name" hidden></p>
+
+                                <div id="capture-image-preview-wrap" class="image-preview-wrap" hidden>
+                                    <img id="capture-image-preview" class="image-preview" alt="Selected upload preview" hidden>
+                                </div>
+
+                                <div id="capture-image-results" class="field image-results" hidden>
+                                    <span>Extracted text</span>
+                                    <textarea id="capture-image-text" rows="7" readonly placeholder="Extracted text will appear here."></textarea>
+                                    <div class="capture-image-actions">
+                                        <button id="capture-image-insert" class="ghost-button" type="button" hidden>Insert into note</button>
+                                    </div>
+                                </div>
+                            </section>
+
                             <div class="field-row">
                                 <label class="field">
                                     <span>Link</span>
@@ -5058,6 +5453,12 @@ function renderHomePage() {
     const contentInput = document.querySelector('#note-content');
     const micButton = document.querySelector('#note-mic-button');
     const urlInput = document.querySelector('#note-url');
+    const imageInput = document.querySelector('#note-image-input');
+    const imageDropzone = document.querySelector('#capture-image-dropzone');
+    const imageSelectButton = document.querySelector('#capture-image-select');
+    const imageProcessButton = document.querySelector('#capture-image-process');
+    const imageClearButton = document.querySelector('#capture-image-clear');
+    const imageInsertButton = document.querySelector('#capture-image-insert');
     const tagsInput = document.querySelector('#note-tags');
     const tagsTextInput = document.querySelector('#note-tags-input');
     const tagsList = document.querySelector('#capture-tags-list');
@@ -5072,6 +5473,7 @@ function renderHomePage() {
     const graphNotePanel = document.querySelector('#graph-note-panel');
     const timelineView = document.querySelector('#timeline-view');
     const themeToggle = document.querySelector('#theme-toggle');
+    const captureImageControls = getCaptureImageControls();
     const captureTagControls = {
         tagsInput,
         tagsTextInput,
@@ -5084,6 +5486,7 @@ function renderHomePage() {
     searchInput.value = state.query;
     renderCaptureTagsInput(captureTagControls);
     renderCaptureTagSuggestions(captureTagControls);
+    renderCaptureImage(captureImageControls);
     applyThemePreference();
     speechState.statusMessage = getSpeechDefaultMessage();
     updateSpeechUi();
@@ -5112,7 +5515,8 @@ function renderHomePage() {
                 tagsList,
                 suggestionsWrap: tagSuggestions,
                 suggestionsList: tagSuggestionsList,
-                saveButton
+                saveButton,
+                imageControls: captureImageControls
             });
         } catch (error) {
             console.error('Failed to save note.', error);
@@ -5134,6 +5538,78 @@ function renderHomePage() {
     contentInput.addEventListener('input', (event) => {
         scheduleTagSuggestions(event.target.value, captureTagControls);
     });
+
+    imageSelectButton?.addEventListener('click', () => {
+        imageInput?.click();
+    });
+
+    imageDropzone?.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement ? event.target.closest('button') : null;
+
+        if (target) {
+            return;
+        }
+
+        imageInput?.click();
+    });
+
+    imageInput?.addEventListener('change', async (event) => {
+        const file = event.target instanceof HTMLInputElement ? event.target.files?.[0] : null;
+
+        if (!file) {
+            return;
+        }
+
+        await selectCaptureImage(file, captureImageControls);
+    });
+
+    imageProcessButton?.addEventListener('click', async () => {
+        await processCaptureImage(captureImageControls);
+    });
+
+    imageClearButton?.addEventListener('click', () => {
+        resetCaptureImageState(captureImageControls);
+        setFeedback('Image cleared.');
+    });
+
+    imageInsertButton?.addEventListener('click', () => {
+        insertCaptureImageText(contentInput, captureImageControls);
+    });
+
+    if (imageDropzone) {
+        let dragDepth = 0;
+
+        ['dragenter', 'dragover'].forEach((eventName) => {
+            imageDropzone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                dragDepth += eventName === 'dragenter' ? 1 : 0;
+                setCaptureImageState({ isDragActive: true }, captureImageControls);
+            });
+        });
+
+        imageDropzone.addEventListener('dragleave', (event) => {
+            event.preventDefault();
+            dragDepth = Math.max(0, dragDepth - 1);
+
+            if (dragDepth === 0) {
+                setCaptureImageState({ isDragActive: false }, captureImageControls);
+            }
+        });
+
+        imageDropzone.addEventListener('drop', async (event) => {
+            event.preventDefault();
+            dragDepth = 0;
+
+            const file = event.dataTransfer?.files?.[0] || null;
+
+            if (!file) {
+                setCaptureImageState({ isDragActive: false }, captureImageControls);
+                return;
+            }
+
+            await selectCaptureImage(file, captureImageControls);
+        });
+    }
 
     tagsControl.addEventListener('click', (event) => {
         if (event.target instanceof HTMLButtonElement) {
