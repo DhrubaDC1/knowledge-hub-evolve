@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { fetchLinkMetadata } from './lib/fetch-link.js';
 import { searchNotes } from './lib/search.js';
+import { suggestTags } from './lib/suggest-tags.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -168,6 +169,46 @@ async function handleSearch(req, res) {
     }
 }
 
+async function handleSuggestTags(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const content = typeof body.content === 'string' ? body.content.trim() : '';
+    const existingTags = Array.isArray(body.existingTags) ? body.existingTags : null;
+
+    if (!content) {
+        return sendJson(res, 400, { error: 'Content is required.' });
+    }
+
+    if (!existingTags) {
+        return sendJson(res, 400, { error: 'Existing tags must be an array.' });
+    }
+
+    try {
+        const tags = await suggestTags(content, existingTags);
+        return sendJson(res, 200, { tags });
+    } catch (error) {
+        console.error('Failed to suggest tags.', error);
+        return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : 'Failed to suggest tags.'
+        });
+    }
+}
+
 async function handleStaticAsset(req, res, pathname) {
     const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
     const assetPath = path.resolve(PUBLIC_DIR, relativePath);
@@ -211,6 +252,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/search') {
         await handleSearch(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/suggest-tags') {
+        await handleSuggestTags(req, res);
         return;
     }
 
