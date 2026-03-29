@@ -14,6 +14,7 @@ import { extractTextFromPdf } from './lib/process-pdf.js';
 import { searchNotes } from './lib/search.js';
 import { suggestTags } from './lib/suggest-tags.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
+import { suggestRevisitNotes } from './public/revisit.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -248,6 +249,51 @@ async function handleSuggestTags(req, res) {
     }
 }
 
+async function handleSuggestRevisit(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const notes = Array.isArray(body.notes) ? body.notes : null;
+    const limit = Number.isFinite(Number(body.limit))
+        ? Math.max(1, Math.min(12, Math.round(Number(body.limit))))
+        : undefined;
+
+    if (!notes) {
+        return sendJson(res, 400, { error: 'Notes must be an array.' });
+    }
+
+    try {
+        const suggestions = suggestRevisitNotes(notes, {
+            limit,
+            now: body.now
+        });
+
+        return sendJson(res, 200, {
+            suggestions,
+            generatedAt: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('Failed to suggest revisit notes.', error);
+        return sendJson(res, 500, {
+            error: error instanceof Error ? error.message : 'Failed to suggest revisit notes.'
+        });
+    }
+}
+
 async function handleProcessImage(req, res) {
     setCorsHeaders(res);
 
@@ -435,6 +481,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/suggest-tags') {
         await handleSuggestTags(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/suggest-revisit') {
+        await handleSuggestRevisit(req, res);
         return;
     }
 

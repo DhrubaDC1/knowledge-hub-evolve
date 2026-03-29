@@ -1,4 +1,11 @@
 import { clusterNotesByOverlappingTags } from './cluster.js';
+import {
+    buildReviewUpdate,
+    buildViewUpdate,
+    createRevisitSuggestionsFingerprint,
+    normalizeRevisitState,
+    suggestRevisitNotes
+} from './revisit.js';
 
 const STORAGE_KEY = 'kh-notes';
 const THEME_STORAGE_KEY = 'kh-theme';
@@ -35,6 +42,7 @@ const CLUSTER_COLOR_HUES = [168, 24, 218, 338, 84, 196, 12, 266, 48, 132];
 const TIMELINE_DAY_GROUP_WINDOW_DAYS = 7;
 const UNTAGGED_FILTER_VALUE = '__untagged__';
 const UNTAGGED_FILTER_LABEL = 'untagged';
+const REVISIT_SUGGESTIONS_MAX_RESULTS = 4;
 const GRAPH_STOP_WORDS = new Set([
     'a',
     'an',
@@ -176,6 +184,13 @@ const state = {
     patternAnalysisResolvedFingerprint: '',
     patternAnalysisRequestFingerprint: '',
     patternAnalysisRequestToken: 0,
+    revisitSuggestions: [],
+    isRevisitLoading: false,
+    revisitError: '',
+    revisitFingerprint: '',
+    revisitResolvedFingerprint: '',
+    revisitRequestFingerprint: '',
+    revisitRequestToken: 0,
     themePreference: readThemePreference(),
     activeTheme: 'light'
 };
@@ -279,7 +294,7 @@ class KnowledgeHubStorage {
         return this.write(filteredNotes);
     }
 
-    update(id, data) {
+    update(id, data, options = {}) {
         const noteId = String(id);
         const notes = this.read();
         let updatedNote = null;
@@ -294,7 +309,9 @@ class KnowledgeHubStorage {
                 ...data,
                 id: note.id,
                 createdAt: note.createdAt,
-                updatedAt: new Date().toISOString()
+                updatedAt: options.preserveUpdatedAt
+                    ? note.updatedAt
+                    : new Date().toISOString()
             });
 
             return updatedNote;
@@ -1451,6 +1468,7 @@ function createNoteModel(note = {}, overrides = {}) {
     const summary = typeof note.summary === 'string' ? note.summary.trim() : '';
     const insights = normalizeInsights(note.insights);
     const sourceDocument = normalizeSourceDocument(note.sourceDocument);
+    const revisit = normalizeRevisitState(note.revisit);
 
     return {
         id: '',
@@ -1464,6 +1482,7 @@ function createNoteModel(note = {}, overrides = {}) {
         tags,
         autoTags,
         sourceDocument,
+        revisit,
         createdAt: '',
         updatedAt: '',
         ...overrides
@@ -1535,6 +1554,39 @@ function formatRelativeTime(dateValue) {
     }
 
     return 'Just now';
+}
+
+function formatCalendarDate(dateValue) {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return new Intl.DateTimeFormat('en', {
+        month: 'short',
+        day: 'numeric'
+    }).format(date);
+}
+
+function formatRevisitDueLabel(suggestion = {}) {
+    if (suggestion.status === 'overdue') {
+        return suggestion.daysOverdue <= 1
+            ? 'Overdue by 1 day'
+            : `Overdue by ${suggestion.daysOverdue} days`;
+    }
+
+    if (suggestion.status === 'today') {
+        return 'Due today';
+    }
+
+    if (suggestion.daysUntilDue === 1) {
+        return 'Due tomorrow';
+    }
+
+    return suggestion.dueAt
+        ? `Due ${formatCalendarDate(suggestion.dueAt)}`
+        : 'Coming up';
 }
 
 function formatJournalDate(dateValue) {
@@ -3209,6 +3261,76 @@ async function requestTagSuggestions(content, existingTags) {
     return Array.isArray(payload?.tags) ? normalizeTags(payload.tags) : [];
 }
 
+function normalizeRevisitSuggestions(entries) {
+    return (Array.isArray(entries) ? entries : [])
+        .map((entry) => {
+            const noteId = entry?.noteId ? String(entry.noteId) : '';
+
+            if (!noteId) {
+                return null;
+            }
+
+            return {
+                noteId,
+                dueAt: typeof entry?.dueAt === 'string' ? entry.dueAt : '',
+                status: entry?.status === 'overdue' || entry?.status === 'today' ? entry.status : 'soon',
+                daysUntilDue: Number.isFinite(Number(entry?.daysUntilDue))
+                    ? Math.round(Number(entry.daysUntilDue))
+                    : 0,
+                daysOverdue: Number.isFinite(Number(entry?.daysOverdue))
+                    ? Math.max(0, Math.round(Number(entry.daysOverdue)))
+                    : 0,
+                reviewCount: Number.isFinite(Number(entry?.reviewCount))
+                    ? Math.max(0, Math.round(Number(entry.reviewCount)))
+                    : 0,
+                viewCount: Number.isFinite(Number(entry?.viewCount))
+                    ? Math.max(0, Math.round(Number(entry.viewCount)))
+                    : 0,
+                lastViewedAt: typeof entry?.lastViewedAt === 'string' ? entry.lastViewedAt : '',
+                lastReviewedAt: typeof entry?.lastReviewedAt === 'string' ? entry.lastReviewedAt : '',
+                nextIntervalDays: Number.isFinite(Number(entry?.nextIntervalDays))
+                    ? Math.max(1, Math.round(Number(entry.nextIntervalDays)))
+                    : 1,
+                priorityScore: Number.isFinite(Number(entry?.priorityScore))
+                    ? Number(entry.priorityScore)
+                    : 0,
+                reason: typeof entry?.reason === 'string' ? entry.reason.trim() : ''
+            };
+        })
+        .filter(Boolean);
+}
+
+async function requestRevisitSuggestions(notes) {
+    const response = await fetch('/api/suggest-revisit', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            notes,
+            limit: REVISIT_SUGGESTIONS_MAX_RESULTS
+        })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Revisit API not found. Run the app with `npm run dev` so Vercel serves `/api/suggest-revisit`.');
+        }
+
+        throw new Error(payload?.error || 'Could not load revisit suggestions right now.');
+    }
+
+    return normalizeRevisitSuggestions(payload?.suggestions);
+}
+
 function resetSearchState() {
     clearScheduledSearch();
     state.isSearching = false;
@@ -3226,6 +3348,39 @@ function refreshVisibleNotes() {
     }
 
     renderNotesList();
+}
+
+async function refreshRevisitSuggestions(notes, fingerprint, requestToken) {
+    try {
+        const suggestions = await requestRevisitSuggestions(notes);
+
+        if (requestToken !== state.revisitRequestToken || fingerprint !== state.revisitFingerprint) {
+            return;
+        }
+
+        state.revisitSuggestions = suggestions;
+        state.isRevisitLoading = false;
+        state.revisitError = '';
+        state.revisitResolvedFingerprint = fingerprint;
+        state.revisitRequestFingerprint = '';
+        renderRevisitSection(notes);
+    } catch (error) {
+        if (requestToken !== state.revisitRequestToken || fingerprint !== state.revisitFingerprint) {
+            return;
+        }
+
+        console.error('Failed to load revisit suggestions via API.', error);
+        state.revisitSuggestions = normalizeRevisitSuggestions(suggestRevisitNotes(notes, {
+            limit: REVISIT_SUGGESTIONS_MAX_RESULTS
+        }));
+        state.isRevisitLoading = false;
+        state.revisitError = error instanceof Error
+            ? error.message
+            : 'Could not load revisit suggestions right now.';
+        state.revisitResolvedFingerprint = fingerprint;
+        state.revisitRequestFingerprint = '';
+        renderRevisitSection(notes);
+    }
 }
 
 async function requestSearchResults(query, notes) {
@@ -3594,6 +3749,52 @@ function clearNoteUiState(noteId, options = {}) {
     delete state.noteUi[noteId];
 }
 
+function updateStoredNoteRevisit(noteId, computeNextRevisit) {
+    const note = Storage.getById(noteId);
+
+    if (!note || typeof computeNextRevisit !== 'function') {
+        return null;
+    }
+
+    const nextRevisit = normalizeRevisitState(computeNextRevisit(note));
+
+    if (JSON.stringify(nextRevisit) === JSON.stringify(normalizeRevisitState(note.revisit))) {
+        return null;
+    }
+
+    const updatedNote = Storage.update(noteId, { revisit: nextRevisit }, { preserveUpdatedAt: true });
+
+    return updatedNote || null;
+}
+
+function trackNoteView(noteId, options = {}) {
+    const updatedNote = updateStoredNoteRevisit(noteId, (note) => {
+        return buildViewUpdate(note, {
+            viewedAt: options.viewedAt
+        });
+    });
+
+    if (updatedNote && !options.skipRender) {
+        refreshVisibleNotes();
+    }
+
+    return updatedNote;
+}
+
+function markNoteReviewed(noteId) {
+    const updatedNote = updateStoredNoteRevisit(noteId, (note) => {
+        return buildReviewUpdate(note);
+    });
+
+    if (!updatedNote) {
+        return false;
+    }
+
+    setFeedback(`Marked "${updatedNote.title || 'note'}" as reviewed.`);
+    refreshVisibleNotes();
+    return true;
+}
+
 function getRelatedNotesCacheEntry(noteId) {
     return state.relatedNotesCache[noteId] || null;
 }
@@ -3908,6 +4109,35 @@ function syncPatternAnalysis(notes) {
     state.patternAnalysisError = '';
     state.patternAnalysisRequestFingerprint = fingerprint;
     void refreshPatternAnalysis(nextNotes, fingerprint, state.patternAnalysisRequestToken);
+}
+
+function syncRevisitSuggestions(notes) {
+    const nextNotes = Array.isArray(notes) ? notes : [];
+    const fingerprint = createRevisitSuggestionsFingerprint(nextNotes);
+
+    state.revisitFingerprint = fingerprint;
+
+    if (!fingerprint) {
+        state.revisitSuggestions = [];
+        state.isRevisitLoading = false;
+        state.revisitError = '';
+        state.revisitResolvedFingerprint = '';
+        state.revisitRequestFingerprint = '';
+        return;
+    }
+
+    if (state.revisitResolvedFingerprint === fingerprint || state.revisitRequestFingerprint === fingerprint) {
+        return;
+    }
+
+    state.revisitSuggestions = normalizeRevisitSuggestions(suggestRevisitNotes(nextNotes, {
+        limit: REVISIT_SUGGESTIONS_MAX_RESULTS
+    }));
+    state.revisitRequestToken += 1;
+    state.isRevisitLoading = true;
+    state.revisitError = '';
+    state.revisitRequestFingerprint = fingerprint;
+    void refreshRevisitSuggestions(nextNotes, fingerprint, state.revisitRequestToken);
 }
 
 function setFeedback(message) {
@@ -4935,6 +5165,140 @@ function renderTagFilters(notes) {
     tagFilters.replaceChildren(fragment);
 }
 
+function createRevisitSuggestionCard(note, suggestion) {
+    const article = document.createElement('article');
+    const topRow = document.createElement('div');
+    const heading = document.createElement('div');
+    const title = document.createElement('h3');
+    const meta = document.createElement('p');
+    const reason = document.createElement('p');
+    const snippet = document.createElement('p');
+    const actions = document.createElement('div');
+    const openButton = document.createElement('button');
+    const reviewButton = document.createElement('button');
+    const snippetText = note.summary || note.content || note.url || 'Open this note to review it.';
+    const reviewedMeta = suggestion.lastReviewedAt
+        ? `Last reviewed ${formatRelativeTime(suggestion.lastReviewedAt)}`
+        : (suggestion.lastViewedAt ? `Last viewed ${formatRelativeTime(suggestion.lastViewedAt)}` : 'Not reviewed yet');
+
+    article.className = 'revisit-card';
+    topRow.className = 'revisit-card-top';
+    heading.className = 'revisit-card-heading';
+
+    title.className = 'revisit-card-title';
+    title.textContent = note.title || (note.type === 'link' ? 'Saved link' : 'Untitled note');
+
+    meta.className = 'revisit-card-meta';
+    meta.textContent = `${formatRevisitDueLabel(suggestion)} • ${reviewedMeta}`;
+
+    heading.append(title, meta);
+
+    reason.className = 'revisit-card-reason';
+    reason.textContent = suggestion.reason || 'Scheduled for revisit.';
+
+    snippet.className = 'revisit-card-snippet';
+    snippet.textContent = truncateText(snippetText, 150);
+
+    actions.className = 'revisit-card-actions';
+
+    openButton.className = 'secondary-button';
+    openButton.type = 'button';
+    openButton.dataset.noteId = note.id;
+    openButton.dataset.revisitAction = 'open-note';
+    openButton.textContent = 'Open note';
+
+    reviewButton.className = 'ghost-button revisit-review-button';
+    reviewButton.type = 'button';
+    reviewButton.dataset.noteId = note.id;
+    reviewButton.dataset.revisitAction = 'mark-reviewed';
+    reviewButton.textContent = 'Mark as reviewed';
+
+    topRow.append(heading);
+    actions.append(openButton, reviewButton);
+    article.append(topRow, reason, snippet, actions);
+
+    return article;
+}
+
+function renderRevisitSection(allNotes = Storage.getAll()) {
+    const section = document.querySelector('#revisit-section');
+    const status = document.querySelector('#revisit-status');
+    const list = document.querySelector('#revisit-list');
+    const count = document.querySelector('#revisit-count');
+
+    if (!section || !status || !list || !count) {
+        return;
+    }
+
+    const noteCount = Array.isArray(allNotes) ? allNotes.length : 0;
+
+    if (!noteCount) {
+        section.hidden = true;
+        list.replaceChildren();
+        return;
+    }
+
+    const notesById = new Map(allNotes.map((note) => [note.id, note]));
+    const suggestions = normalizeRevisitSuggestions(state.revisitSuggestions)
+        .map((suggestion) => {
+            const note = notesById.get(suggestion.noteId);
+
+            if (!note) {
+                return null;
+            }
+
+            return {
+                note,
+                suggestion
+            };
+        })
+        .filter(Boolean);
+
+    section.hidden = false;
+    count.textContent = suggestions.length
+        ? formatCountLabel(suggestions.length, 'note')
+        : '0 notes';
+
+    if (state.isRevisitLoading && !suggestions.length) {
+        status.textContent = 'Calculating spaced repetition suggestions...';
+    } else if (state.revisitError && suggestions.length) {
+        status.textContent = 'Showing local suggestions because the revisit API is unavailable.';
+    } else if (state.revisitError) {
+        status.textContent = state.revisitError;
+    } else if (suggestions.length) {
+        status.textContent = 'Based on your local review history and spaced intervals.';
+    } else {
+        status.textContent = 'Nothing is due right now. Recently reviewed notes will reappear automatically.';
+    }
+
+    if (!suggestions.length) {
+        const emptyState = document.createElement('div');
+        const title = document.createElement('p');
+        const copy = document.createElement('p');
+
+        emptyState.className = 'revisit-empty';
+        title.className = 'revisit-empty-title';
+        title.textContent = state.isRevisitLoading
+            ? 'Preparing revisit suggestions...'
+            : 'No notes to revisit yet.';
+        copy.className = 'revisit-empty-copy';
+        copy.textContent = state.isRevisitLoading
+            ? 'Recent note history is being evaluated now.'
+            : 'Open notes and mark them reviewed to build a spaced repetition rhythm.';
+        emptyState.append(title, copy);
+        list.replaceChildren(emptyState);
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    suggestions.forEach(({ note, suggestion }) => {
+        fragment.append(createRevisitSuggestionCard(note, suggestion));
+    });
+
+    list.replaceChildren(fragment);
+}
+
 function createEmptyState(allNotes) {
     const emptyState = document.createElement('div');
     const title = document.createElement('p');
@@ -5427,6 +5791,10 @@ function syncExpandedRelatedNotes() {
 function toggleNoteExpansion(noteId) {
     const isExpanded = getNoteUiState(noteId).isExpanded;
 
+    if (!isExpanded) {
+        trackNoteView(noteId, { skipRender: true });
+    }
+
     setNoteUiState(noteId, {
         isExpanded: !isExpanded,
         relatedError: isExpanded ? '' : getNoteUiState(noteId).relatedError
@@ -5458,17 +5826,17 @@ function focusNoteCard(noteId) {
     }
 }
 
-function openRelatedNote(noteId) {
-    const relatedNote = Storage.getById(noteId);
+function openNoteInList(noteId, options = {}) {
+    const note = Storage.getById(noteId);
 
-    if (!relatedNote) {
-        setFeedback('That related note is no longer available.');
+    if (!note) {
+        setFeedback('That note is no longer available.');
         invalidateRelatedNotesCache();
         renderNotesList();
         return false;
     }
 
-    const isVisible = state.notes.some((note) => note.id === noteId);
+    const isVisible = state.notes.some((entry) => entry.id === noteId);
 
     if (!isVisible) {
         state.query = '';
@@ -5482,6 +5850,11 @@ function openRelatedNote(noteId) {
         }
     }
 
+    if (options.trackView !== false) {
+        trackNoteView(noteId, { skipRender: true });
+    }
+
+    setActiveLibraryView('list');
     setNoteUiState(noteId, { isExpanded: true });
     renderNotesList();
     void ensureRelatedNotesLoaded(noteId);
@@ -5490,6 +5863,10 @@ function openRelatedNote(noteId) {
     });
 
     return true;
+}
+
+function openRelatedNote(noteId) {
+    return openNoteInList(noteId);
 }
 
 function createRelatedNoteCard(note) {
@@ -6114,9 +6491,11 @@ function renderNotesList() {
     syncGraphData(state.notes);
     syncGraphSelection(state.notes);
     syncPatternAnalysis(allNotes);
+    syncRevisitSuggestions(allNotes);
 
     syncOverview(allNotes);
     syncNotesPresentation(allNotes);
+    renderRevisitSection(allNotes);
     notesList.classList.toggle('has-results', state.notes.length > 0);
     notesList.classList.toggle('is-clustered', state.notes.length > 0);
 
@@ -6382,6 +6761,21 @@ function renderHomePage() {
                     <p id="notes-count-indicator" class="notes-count-indicator" aria-live="polite">0 notes saved</p>
                     <div id="notes-tag-filters" class="tag-filter-bar" aria-label="Filter notes by tag" hidden></div>
                     <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
+
+                    <section id="revisit-section" class="revisit-section" hidden>
+                        <div class="revisit-section-header">
+                            <div>
+                                <p class="panel-kicker">Revisit</p>
+                                <h3 class="revisit-section-title">Notes to revisit</h3>
+                                <p id="revisit-status" class="revisit-status" aria-live="polite">Calculating spaced repetition suggestions...</p>
+                            </div>
+
+                            <span id="revisit-count" class="revisit-count">0 notes</span>
+                        </div>
+
+                        <div id="revisit-list" class="revisit-list" aria-live="polite"></div>
+                    </section>
+
                     <div class="view-tabs" role="tablist" aria-label="Library views">
                         <button class="view-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="notes-list-view" data-library-view="list">List</button>
                         <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="insights-view" tabindex="-1" data-library-view="insights">Insights</button>
@@ -6484,6 +6878,7 @@ function renderHomePage() {
     const searchInput = document.querySelector('#notes-search');
     const tagFilters = document.querySelector('#notes-tag-filters');
     const saveButton = document.querySelector('#save-note');
+    const revisitSection = document.querySelector('#revisit-section');
     const notesList = document.querySelector('#notes-list');
     const graphNotePanel = document.querySelector('#graph-note-panel');
     const timelineView = document.querySelector('#timeline-view');
@@ -6787,6 +7182,29 @@ function renderHomePage() {
         }
     });
 
+    revisitSection?.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest('[data-revisit-action]')
+            : null;
+
+        if (!(target instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        if (target.dataset.revisitAction === 'open-note') {
+            openNoteInList(target.dataset.noteId);
+            return;
+        }
+
+        if (target.dataset.revisitAction === 'mark-reviewed') {
+            const reviewed = markNoteReviewed(target.dataset.noteId);
+
+            if (!reviewed) {
+                setFeedback('That note could not be marked as reviewed.');
+            }
+        }
+    });
+
     notesList.addEventListener('click', async (event) => {
         const target = event.target instanceof HTMLElement
             ? event.target.closest('button')
@@ -6852,10 +7270,7 @@ function renderHomePage() {
             return;
         }
 
-        setActiveLibraryView('list');
-        window.requestAnimationFrame(() => {
-            focusNoteCard(target.dataset.noteId);
-        });
+        openNoteInList(target.dataset.noteId);
     });
 
     timelineView?.addEventListener('click', (event) => {
@@ -6867,10 +7282,7 @@ function renderHomePage() {
             return;
         }
 
-        setActiveLibraryView('list');
-        window.requestAnimationFrame(() => {
-            focusNoteCard(target.dataset.noteId);
-        });
+        openNoteInList(target.dataset.noteId);
     });
 
     renderNotesList();
