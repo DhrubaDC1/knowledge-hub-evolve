@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vercel dev",
+    "dev": "node dev-server.mjs",
+    "dev:static": "serve public -l 3000",
+    "vercel": "vercel dev --listen 127.0.0.1:3000",
     "build": "echo 'Static build — no build step required'"
   },
   "dependencies": {
-    "openai": "^4.0.0",
+    "dotenv": "^16.6.1",
+    "serve": "^14.2.6",
     "vercel": "^50.37.3"
   }
 }

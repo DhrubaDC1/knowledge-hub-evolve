@@ -5,7 +5,10 @@ const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto
 const state = {
     notes: [],
     query: '',
-    feedback: ''
+    feedback: '',
+    captureAutoSummarize: false,
+    isSavingNote: false,
+    noteUi: {}
 };
 
 class KnowledgeHubStorage {
@@ -164,9 +167,7 @@ function createNoteModel(note = {}, overrides = {}) {
     const tags = Array.isArray(note.tags)
         ? note.tags.map((tag) => String(tag).trim()).filter(Boolean)
         : [];
-    const summary = typeof note.summary === 'string' && note.summary.trim()
-        ? note.summary.trim()
-        : deriveSummary(content || title || url);
+    const summary = typeof note.summary === 'string' ? note.summary.trim() : '';
 
     return {
         id: '',
@@ -196,10 +197,6 @@ function deriveTitle({ content, url, type }) {
     }
 
     return 'Untitled note';
-}
-
-function deriveSummary(content) {
-    return truncateText(content, 200);
 }
 
 function truncateText(value, maxLength) {
@@ -266,9 +263,60 @@ function createNoteFromInputs({ content, url, tags }) {
         content: trimmedContent,
         url: trimmedUrl,
         title: deriveTitle({ content: trimmedContent, url: trimmedUrl, type }),
-        summary: deriveSummary(trimmedContent || trimmedUrl),
         tags: parsedTags
     });
+}
+
+function getNoteUiState(noteId) {
+    return state.noteUi[noteId] || {
+        isSummarizing: false,
+        error: ''
+    };
+}
+
+function setNoteUiState(noteId, nextState) {
+    state.noteUi[noteId] = {
+        ...getNoteUiState(noteId),
+        ...nextState
+    };
+}
+
+function clearNoteUiState(noteId) {
+    delete state.noteUi[noteId];
+}
+
+async function requestSummary(text) {
+    const response = await fetch('/api/summarize', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ text })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Summary API not found. Run the app with `npm run dev` so Vercel serves `/api/summarize`.');
+        }
+
+        throw new Error(payload?.error || 'Could not summarize this note right now.');
+    }
+
+    const summary = typeof payload?.summary === 'string' ? payload.summary.trim() : '';
+
+    if (!summary) {
+        throw new Error('Could not summarize this note right now.');
+    }
+
+    return summary;
 }
 
 function setFeedback(message) {
@@ -295,9 +343,15 @@ function createNoteCard(note) {
     const meta = document.createElement('div');
     const typeLabel = document.createElement('span');
     const timeLabel = document.createElement('span');
+    const actions = document.createElement('div');
+    const summarizeButton = document.createElement('button');
     const deleteButton = document.createElement('button');
     const bodyText = document.createElement('p');
+    const summaryText = document.createElement('p');
+    const errorText = document.createElement('p');
     const tags = document.createElement('div');
+    const uiState = getNoteUiState(note.id);
+    const canSummarize = Boolean(note.content && !note.summary);
 
     article.className = 'note-card';
     article.dataset.noteId = note.id;
@@ -312,14 +366,39 @@ function createNoteCard(note) {
     timeLabel.textContent = formatRelativeTime(note.createdAt);
     meta.append(typeLabel, timeLabel);
 
+    actions.className = 'note-actions';
+
+    if (canSummarize) {
+        summarizeButton.className = 'note-summarize';
+        summarizeButton.type = 'button';
+        summarizeButton.dataset.noteId = note.id;
+        summarizeButton.disabled = uiState.isSummarizing;
+        summarizeButton.setAttribute('aria-label', `Summarize ${note.title || 'note'}`);
+
+        if (uiState.isSummarizing) {
+            const spinner = document.createElement('span');
+            const label = document.createElement('span');
+
+            spinner.className = 'button-spinner';
+            spinner.setAttribute('aria-hidden', 'true');
+            label.textContent = 'Summarizing';
+            summarizeButton.append(spinner, label);
+        } else {
+            summarizeButton.textContent = 'Summarize';
+        }
+
+        actions.append(summarizeButton);
+    }
+
     deleteButton.className = 'note-delete';
     deleteButton.type = 'button';
     deleteButton.dataset.noteId = note.id;
     deleteButton.setAttribute('aria-label', `Delete ${note.title || 'note'}`);
     deleteButton.textContent = 'Delete';
 
+    actions.append(deleteButton);
     headingGroup.append(title, meta);
-    topRow.append(headingGroup, deleteButton);
+    topRow.append(headingGroup, actions);
     article.append(topRow);
 
     if (note.type === 'link' && note.url) {
@@ -336,6 +415,19 @@ function createNoteCard(note) {
         bodyText.className = 'note-content';
         bodyText.textContent = truncateText(note.content, 200);
         article.append(bodyText);
+    }
+
+    if (note.summary) {
+        summaryText.className = 'note-summary';
+        summaryText.textContent = note.summary;
+        article.append(summaryText);
+    }
+
+    if (uiState.error) {
+        errorText.className = 'note-error';
+        errorText.textContent = uiState.error;
+        errorText.setAttribute('role', 'alert');
+        article.append(errorText);
     }
 
     tags.className = 'note-tags';
@@ -360,7 +452,53 @@ function clearCaptureInputs({ contentInput, urlInput, tagsInput }) {
     tagsInput.value = '';
 }
 
-function saveNote({ contentInput, urlInput, tagsInput }) {
+function updateSaveButton(saveButton) {
+    if (!saveButton) {
+        return;
+    }
+
+    saveButton.disabled = state.isSavingNote;
+    saveButton.textContent = state.isSavingNote ? 'Saving...' : 'Save';
+}
+
+async function summarizeNote(noteId) {
+    const note = Storage.getById(noteId);
+
+    if (!note || !note.content || note.summary) {
+        return false;
+    }
+
+    setNoteUiState(noteId, { isSummarizing: true, error: '' });
+    renderNotesList();
+
+    try {
+        const summary = await requestSummary(note.content);
+        const updatedNote = Storage.update(noteId, { summary });
+
+        if (!updatedNote) {
+            throw new Error('Could not save the summary.');
+        }
+
+        clearNoteUiState(noteId);
+        setFeedback('Summary added.');
+        renderNotesList();
+        return true;
+    } catch (error) {
+        console.error('Failed to summarize note.', error);
+        setNoteUiState(noteId, {
+            isSummarizing: false,
+            error: error instanceof Error ? error.message : 'Could not summarize this note right now.'
+        });
+        renderNotesList();
+        return false;
+    }
+}
+
+async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
+    if (state.isSavingNote) {
+        return false;
+    }
+
     const nextNote = createNoteFromInputs({
         content: contentInput.value,
         url: urlInput.value,
@@ -372,18 +510,47 @@ function saveNote({ contentInput, urlInput, tagsInput }) {
         return false;
     }
 
-    const savedNote = Storage.save(nextNote);
+    state.isSavingNote = true;
+    updateSaveButton(saveButton);
 
-    if (!savedNote) {
-        setFeedback('Could not save this note. Please try again.');
-        return false;
+    let noteToSave = nextNote;
+    let successMessage = 'Saved.';
+
+    try {
+        if (state.captureAutoSummarize && nextNote.content) {
+            setFeedback('Saving and summarizing...');
+            noteToSave = {
+                ...nextNote,
+                summary: await requestSummary(nextNote.content)
+            };
+            successMessage = 'Saved and summarized.';
+        } else {
+            setFeedback('Saving...');
+        }
+    } catch (error) {
+        console.error('Failed to summarize before saving note.', error);
+        successMessage = `Saved without summary. ${
+            error instanceof Error ? error.message : 'Could not summarize this note right now.'
+        }`;
     }
 
-    clearCaptureInputs({ contentInput, urlInput, tagsInput });
-    contentInput.focus();
-    setFeedback('Saved.');
-    renderNotesList();
-    return true;
+    try {
+        const savedNote = Storage.save(noteToSave);
+
+        if (!savedNote) {
+            setFeedback('Could not save this note. Please try again.');
+            return false;
+        }
+
+        clearCaptureInputs({ contentInput, urlInput, tagsInput });
+        contentInput.focus();
+        setFeedback(successMessage);
+        renderNotesList();
+        return true;
+    } finally {
+        state.isSavingNote = false;
+        updateSaveButton(saveButton);
+    }
 }
 
 function renderNotesList() {
@@ -436,6 +603,14 @@ function renderApp() {
                     <input id="note-tags" type="text" placeholder="Add tags, comma separated">
                 </label>
 
+                <label class="field field-toggle">
+                    <span>Summarize on save</span>
+                    <span class="toggle-control">
+                        <input id="note-auto-summarize" type="checkbox">
+                        <span class="toggle-copy">Create an AI summary when this note has content.</span>
+                    </span>
+                </label>
+
                 <div class="capture-actions">
                     <button id="save-note" class="primary-button" type="button">Save</button>
                     <p id="capture-feedback" class="capture-feedback" aria-live="polite"></p>
@@ -456,17 +631,26 @@ function renderApp() {
     const contentInput = document.querySelector('#note-content');
     const urlInput = document.querySelector('#note-url');
     const tagsInput = document.querySelector('#note-tags');
+    const autoSummarizeInput = document.querySelector('#note-auto-summarize');
     const searchInput = document.querySelector('#notes-search');
     const saveButton = document.querySelector('#save-note');
     const notesList = document.querySelector('#notes-list');
 
-    saveButton.addEventListener('click', () => {
+    autoSummarizeInput.checked = state.captureAutoSummarize;
+
+    saveButton.addEventListener('click', async () => {
         try {
-            saveNote({ contentInput, urlInput, tagsInput });
+            await saveNote({ contentInput, urlInput, tagsInput, saveButton });
         } catch (error) {
             console.error('Failed to save note.', error);
             setFeedback('Could not save this note. Please try again.');
+        } finally {
+            updateSaveButton(saveButton);
         }
+    });
+
+    autoSummarizeInput.addEventListener('change', (event) => {
+        state.captureAutoSummarize = Boolean(event.target.checked);
     });
 
     searchInput.addEventListener('input', (event) => {
@@ -474,10 +658,21 @@ function renderApp() {
         renderNotesList();
     });
 
-    notesList.addEventListener('click', (event) => {
-        const target = event.target;
+    notesList.addEventListener('click', async (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest('button')
+            : null;
 
-        if (!(target instanceof HTMLElement) || !target.matches('.note-delete')) {
+        if (!(target instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        if (target.matches('.note-summarize')) {
+            await summarizeNote(target.dataset.noteId);
+            return;
+        }
+
+        if (!target.matches('.note-delete')) {
             return;
         }
 
@@ -490,6 +685,7 @@ function renderApp() {
             }
 
             setFeedback('Deleted.');
+            clearNoteUiState(target.dataset.noteId);
             renderNotesList();
         } catch (error) {
             console.error('Failed to delete note.', error);

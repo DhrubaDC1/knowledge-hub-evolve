@@ -1,0 +1,141 @@
+import 'dotenv/config';
+
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const HOST = process.env.HOST || '127.0.0.1';
+const PORT = Number(process.env.PORT || 3000);
+
+const MIME_TYPES = {
+    '.css': 'text/css; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.txt': 'text/plain; charset=utf-8'
+};
+
+function sendJson(res, statusCode, payload) {
+    res.writeHead(statusCode, {
+        'Content-Type': 'application/json; charset=utf-8'
+    });
+    res.end(JSON.stringify(payload));
+}
+
+function setCorsHeaders(res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+}
+
+async function readJsonBody(req) {
+    const chunks = [];
+
+    for await (const chunk of req) {
+        chunks.push(chunk);
+    }
+
+    if (!chunks.length) {
+        return {};
+    }
+
+    try {
+        return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch (error) {
+        return null;
+    }
+}
+
+async function handleSummarize(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+
+    if (!text) {
+        return sendJson(res, 400, { error: 'Text is required.' });
+    }
+
+    if (text.length > MAX_TEXT_LENGTH) {
+        return sendJson(res, 400, { error: `Text must be ${MAX_TEXT_LENGTH} characters or fewer.` });
+    }
+
+    try {
+        const summary = await summarizeText(text);
+        return sendJson(res, 200, { summary });
+    } catch (error) {
+        console.error('Failed to generate summary.', error);
+        return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : 'Failed to generate summary.'
+        });
+    }
+}
+
+async function handleStaticAsset(req, res, pathname) {
+    const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const assetPath = path.resolve(PUBLIC_DIR, relativePath);
+
+    if (!assetPath.startsWith(PUBLIC_DIR)) {
+        sendJson(res, 403, { error: 'Forbidden.' });
+        return;
+    }
+
+    try {
+        const fileContents = await readFile(assetPath);
+        const extension = path.extname(assetPath).toLowerCase();
+
+        res.writeHead(200, {
+            'Content-Type': MIME_TYPES[extension] || 'application/octet-stream'
+        });
+        res.end(fileContents);
+    } catch (error) {
+        if (pathname !== '/') {
+            sendJson(res, 404, { error: 'Not found.' });
+            return;
+        }
+
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Failed to load the app.');
+    }
+}
+
+const server = createServer(async (req, res) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host || `${HOST}:${PORT}`}`);
+
+    if (url.pathname === '/api/summarize') {
+        await handleSummarize(req, res);
+        return;
+    }
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendJson(res, 405, { error: 'Method not allowed.' });
+        return;
+    }
+
+    await handleStaticAsset(req, res, url.pathname);
+});
+
+server.listen(PORT, HOST, () => {
+    console.log(`Knowledge Hub dev server listening on http://${HOST}:${PORT}`);
+});
