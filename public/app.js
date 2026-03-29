@@ -12,6 +12,8 @@ const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 const state = {
     notes: [],
     query: '',
+    activeTagFilter: '',
+    captureTags: [],
     feedback: '',
     captureAutoSummarize: false,
     isSavingNote: false,
@@ -259,9 +261,7 @@ function createNoteModel(note = {}, overrides = {}) {
     const title = typeof note.title === 'string' && note.title.trim()
         ? note.title.trim()
         : deriveTitle({ content, url, type });
-    const tags = Array.isArray(note.tags)
-        ? note.tags.map((tag) => String(tag).trim()).filter(Boolean)
-        : [];
+    const tags = normalizeTags(note.tags);
     const summary = typeof note.summary === 'string' ? note.summary.trim() : '';
 
     return {
@@ -340,6 +340,51 @@ function formatCountLabel(count, singular, plural = `${singular}s`) {
     return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function normalizeTag(tag) {
+    return String(tag || '').trim().toLowerCase();
+}
+
+function normalizeTags(value) {
+    const sourceValues = Array.isArray(value)
+        ? value
+        : String(value || '').split(',');
+    const uniqueTags = new Set();
+
+    sourceValues.forEach((tag) => {
+        const normalizedTag = normalizeTag(tag);
+
+        if (normalizedTag) {
+            uniqueTags.add(normalizedTag);
+        }
+    });
+
+    return [...uniqueTags];
+}
+
+function serializeTags(tags) {
+    return normalizeTags(tags).join(', ');
+}
+
+function getUniqueTags(notes) {
+    const uniqueTags = new Set();
+
+    notes.forEach((note) => {
+        note.tags.forEach((tag) => uniqueTags.add(tag));
+    });
+
+    return [...uniqueTags].sort((left, right) => left.localeCompare(right));
+}
+
+function getTagHue(tag) {
+    return Array.from(String(tag || '')).reduce((hash, character) => {
+        return (hash * 31 + character.charCodeAt(0)) % 360;
+    }, 0);
+}
+
+function setTagTone(tag, element) {
+    element.style.setProperty('--tag-hue', String(getTagHue(tag)));
+}
+
 function collectKnowledgeMetrics(notes) {
     const uniqueTags = new Set();
     let linkCount = 0;
@@ -366,10 +411,7 @@ function collectKnowledgeMetrics(notes) {
 }
 
 function parseTags(value) {
-    return String(value || '')
-        .split(',')
-        .map((tag) => tag.trim())
-        .filter(Boolean);
+    return normalizeTags(value);
 }
 
 function prependDescriptionToContent(description, content) {
@@ -716,14 +758,23 @@ function scheduleSearch(query, options = {}) {
     }, delay);
 }
 
-function getDisplayedNotes(allNotes) {
-    const trimmedQuery = state.query.trim();
-
-    if (!trimmedQuery) {
-        return allNotes;
+function filterNotesByActiveTag(notes) {
+    if (!state.activeTagFilter) {
+        return notes;
     }
 
-    const allNotesById = new Map(allNotes.map((note) => [note.id, note]));
+    return notes.filter((note) => note.tags.includes(state.activeTagFilter));
+}
+
+function getDisplayedNotes(allNotes) {
+    const trimmedQuery = state.query.trim();
+    const filteredNotes = filterNotesByActiveTag(allNotes);
+
+    if (!trimmedQuery) {
+        return filteredNotes;
+    }
+
+    const allNotesById = new Map(filteredNotes.map((note) => [note.id, note]));
 
     if (state.resolvedSearchQuery === trimmedQuery) {
         return state.searchResults
@@ -735,7 +786,7 @@ function getDisplayedNotes(allNotes) {
         .map((note) => allNotesById.get(note.id))
         .filter(Boolean);
 
-    return retainedNotes.length ? retainedNotes : allNotes;
+    return retainedNotes.length ? retainedNotes : filteredNotes;
 }
 
 function getNoteUiState(noteId) {
@@ -836,7 +887,116 @@ function createTagPill(tag) {
     const pill = document.createElement('span');
     pill.className = 'note-tag';
     pill.textContent = tag;
+    setTagTone(tag, pill);
     return pill;
+}
+
+function createCaptureTagPill(tag) {
+    const pill = document.createElement('span');
+    const label = document.createElement('span');
+    const removeButton = document.createElement('button');
+
+    pill.className = 'capture-tag';
+    setTagTone(tag, pill);
+
+    label.className = 'capture-tag-label';
+    label.textContent = tag;
+
+    removeButton.className = 'capture-tag-remove';
+    removeButton.type = 'button';
+    removeButton.dataset.tag = tag;
+    removeButton.setAttribute('aria-label', `Remove tag ${tag}`);
+    removeButton.textContent = '×';
+
+    pill.append(label, removeButton);
+
+    return pill;
+}
+
+function createTagFilterPill(tag) {
+    const pill = document.createElement('button');
+
+    pill.className = 'tag-filter-pill';
+    pill.type = 'button';
+    pill.dataset.tag = tag;
+    pill.textContent = tag;
+    pill.setAttribute('aria-pressed', String(state.activeTagFilter === tag));
+    setTagTone(tag, pill);
+
+    if (state.activeTagFilter === tag) {
+        pill.classList.add('is-active');
+    }
+
+    return pill;
+}
+
+function renderCaptureTagsInput({ tagsInput, tagsTextInput, tagsList }) {
+    const fragment = document.createDocumentFragment();
+
+    state.captureTags.forEach((tag) => {
+        fragment.append(createCaptureTagPill(tag));
+    });
+
+    tagsList.replaceChildren(fragment);
+    tagsInput.value = serializeTags(state.captureTags);
+    tagsTextInput.closest('.tag-input')?.classList.toggle('has-tags', state.captureTags.length > 0);
+}
+
+function addCaptureTags(tags, controls) {
+    state.captureTags = normalizeTags([...state.captureTags, ...normalizeTags(tags)]);
+    renderCaptureTagsInput(controls);
+}
+
+function removeCaptureTag(tag, controls) {
+    state.captureTags = state.captureTags.filter((entry) => entry !== tag);
+    renderCaptureTagsInput(controls);
+}
+
+function commitCaptureTagInput(controls, options = {}) {
+    const rawValue = controls.tagsTextInput.value;
+    const segments = String(rawValue || '').split(',');
+    const pendingTags = options.keepLastFragment
+        ? segments.slice(0, -1)
+        : segments;
+
+    if (pendingTags.length) {
+        addCaptureTags(pendingTags, controls);
+    } else {
+        renderCaptureTagsInput(controls);
+    }
+
+    controls.tagsTextInput.value = options.keepLastFragment
+        ? segments.at(-1)?.trimStart() || ''
+        : '';
+}
+
+function renderTagFilters(notes) {
+    const tagFilters = document.querySelector('#notes-tag-filters');
+
+    if (!tagFilters) {
+        return;
+    }
+
+    const uniqueTags = getUniqueTags(notes);
+
+    if (state.activeTagFilter && !uniqueTags.includes(state.activeTagFilter)) {
+        state.activeTagFilter = '';
+    }
+
+    if (!uniqueTags.length) {
+        tagFilters.replaceChildren();
+        tagFilters.hidden = true;
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    uniqueTags.forEach((tag) => {
+        fragment.append(createTagFilterPill(tag));
+    });
+
+    tagFilters.hidden = false;
+    tagFilters.replaceChildren(fragment);
 }
 
 function createEmptyState(query) {
@@ -844,14 +1004,21 @@ function createEmptyState(query) {
     const title = document.createElement('p');
     const copy = document.createElement('p');
     const trimmedQuery = query.trim();
+    const activeTagFilter = state.activeTagFilter;
 
     emptyState.className = 'empty-state';
     title.className = 'empty-state-title';
     copy.className = 'empty-state-copy';
 
-    if (trimmedQuery) {
+    if (trimmedQuery || activeTagFilter) {
         title.textContent = 'No matching notes';
-        copy.textContent = 'Try a different keyword or clear the search to return to your full library.';
+        if (trimmedQuery && activeTagFilter) {
+            copy.textContent = `Try a different keyword or clear the "${activeTagFilter}" filter to return more notes.`;
+        } else if (trimmedQuery) {
+            copy.textContent = 'Try a different keyword or clear the search to return to your full library.';
+        } else {
+            copy.textContent = `There are no saved notes tagged "${activeTagFilter}" yet.`;
+        }
     } else {
         title.textContent = 'Start building your hub';
         copy.textContent = 'Capture a thought, paste a link, or save an idea to create your first card.';
@@ -873,6 +1040,8 @@ function syncOverview(allNotes) {
     const searchStatusElement = document.querySelector('#notes-search-status');
     const resultsPill = document.querySelector('#notes-results-pill');
     const trimmedQuery = state.query.trim();
+    const activeTagFilter = state.activeTagFilter;
+    const tagLabel = activeTagFilter ? ` tagged "${activeTagFilter}"` : '';
 
     if (totalMetric) {
         totalMetric.textContent = String(metrics.totalCount);
@@ -891,13 +1060,15 @@ function syncOverview(allNotes) {
     }
 
     if (notesTitle) {
-        notesTitle.textContent = trimmedQuery ? 'Search results' : 'Your saved knowledge';
+        notesTitle.textContent = trimmedQuery
+            ? 'Search results'
+            : (activeTagFilter ? 'Tagged notes' : 'Your saved knowledge');
     }
 
     if (resultsPill) {
         if (trimmedQuery && state.isSearching) {
             resultsPill.textContent = 'Searching...';
-        } else if (trimmedQuery) {
+        } else if (trimmedQuery || activeTagFilter) {
             resultsPill.textContent = `${formatCountLabel(state.notes.length, 'result')}`;
         } else {
             resultsPill.textContent = `${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}`;
@@ -906,11 +1077,13 @@ function syncOverview(allNotes) {
 
     if (summaryElement) {
         if (trimmedQuery && state.isSearching) {
-            summaryElement.textContent = `Searching notes for "${trimmedQuery}"...`;
+            summaryElement.textContent = `Searching notes for "${trimmedQuery}"${tagLabel}...`;
         } else if (trimmedQuery && state.searchSource === 'local') {
-            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'local result')} for "${trimmedQuery}".`;
+            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'local result')} for "${trimmedQuery}"${tagLabel}.`;
         } else if (trimmedQuery) {
-            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'result')} for "${trimmedQuery}".`;
+            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'result')} for "${trimmedQuery}"${tagLabel}.`;
+        } else if (activeTagFilter) {
+            summaryElement.textContent = `Showing ${formatCountLabel(state.notes.length, 'saved item')} tagged "${activeTagFilter}".`;
         } else {
             summaryElement.textContent = `${formatCountLabel(metrics.totalCount, 'saved item')} including ${formatCountLabel(metrics.linkCount, 'link')}, ${formatCountLabel(metrics.summaryCount, 'AI summary', 'AI summaries')}, and ${formatCountLabel(metrics.tagCount, 'active tag')}.`;
         }
@@ -919,7 +1092,7 @@ function syncOverview(allNotes) {
     if (searchStatusElement) {
         searchStatusElement.textContent = trimmedQuery
             ? (state.isSearching ? 'Searching...' : state.searchStatusMessage)
-            : '';
+            : (activeTagFilter ? `Filter active: ${activeTagFilter}` : '');
     }
 }
 
@@ -1080,10 +1253,13 @@ function createNoteCard(note) {
     return article;
 }
 
-function clearCaptureInputs({ contentInput, urlInput, tagsInput }) {
+function clearCaptureInputs({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList }) {
     contentInput.value = '';
     urlInput.value = '';
+    state.captureTags = [];
     tagsInput.value = '';
+    tagsTextInput.value = '';
+    renderCaptureTagsInput({ tagsInput, tagsTextInput, tagsList });
 }
 
 function setSaveButtonLabel(label, saveButton) {
@@ -1133,10 +1309,12 @@ async function summarizeNote(noteId) {
     }
 }
 
-async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
+async function saveNote({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList, saveButton }) {
     if (state.isSavingNote) {
         return false;
     }
+
+    commitCaptureTagInput({ tagsInput, tagsTextInput, tagsList });
 
     const nextNote = createNoteFromInputs({
         content: contentInput.value,
@@ -1219,7 +1397,7 @@ async function saveNote({ contentInput, urlInput, tagsInput, saveButton }) {
             clearNoteUiState(savedNote.id);
         }
 
-        clearCaptureInputs({ contentInput, urlInput, tagsInput });
+        clearCaptureInputs({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList });
         contentInput.focus();
         setFeedback(successMessage);
 
@@ -1245,6 +1423,7 @@ function renderNotesList() {
     }
 
     const allNotes = Storage.getAll();
+    renderTagFilters(allNotes);
     state.notes = getDisplayedNotes(allNotes);
 
     syncOverview(allNotes);
@@ -1325,7 +1504,11 @@ function renderApp() {
 
                                 <label class="field">
                                     <span>Tags</span>
-                                    <input id="note-tags" type="text" placeholder="Add tags, comma separated">
+                                    <div class="tag-input" id="note-tags-control">
+                                        <div id="capture-tags-list" class="capture-tags-list" aria-live="polite"></div>
+                                        <input id="note-tags-input" type="text" placeholder="Type a tag and press comma or Enter">
+                                    </div>
+                                    <input id="note-tags" type="hidden" value="">
                                 </label>
                             </div>
 
@@ -1360,6 +1543,7 @@ function renderApp() {
                         <span>Search</span>
                         <input id="notes-search" type="search" placeholder="Search notes, links, and tags...">
                     </label>
+                    <div id="notes-tag-filters" class="tag-filter-bar" aria-label="Filter notes by tag" hidden></div>
                     <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
 
                     <div id="notes-list" class="notes-list" aria-live="polite"></div>
@@ -1371,14 +1555,20 @@ function renderApp() {
     const contentInput = document.querySelector('#note-content');
     const urlInput = document.querySelector('#note-url');
     const tagsInput = document.querySelector('#note-tags');
+    const tagsTextInput = document.querySelector('#note-tags-input');
+    const tagsList = document.querySelector('#capture-tags-list');
+    const tagsControl = document.querySelector('#note-tags-control');
     const autoSummarizeInput = document.querySelector('#note-auto-summarize');
     const searchInput = document.querySelector('#notes-search');
+    const tagFilters = document.querySelector('#notes-tag-filters');
     const saveButton = document.querySelector('#save-note');
     const notesList = document.querySelector('#notes-list');
     const themeToggle = document.querySelector('#theme-toggle');
+    const captureTagControls = { tagsInput, tagsTextInput, tagsList };
 
     autoSummarizeInput.checked = state.captureAutoSummarize;
     searchInput.value = state.query;
+    renderCaptureTagsInput(captureTagControls);
     applyThemePreference();
 
     themeToggle.addEventListener('click', () => {
@@ -1387,7 +1577,7 @@ function renderApp() {
 
     saveButton.addEventListener('click', async () => {
         try {
-            await saveNote({ contentInput, urlInput, tagsInput, saveButton });
+            await saveNote({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList, saveButton });
         } catch (error) {
             console.error('Failed to save note.', error);
             setFeedback('Could not save this note. Please try again.');
@@ -1403,6 +1593,66 @@ function renderApp() {
     searchInput.addEventListener('input', (event) => {
         state.query = event.target.value;
         scheduleSearch(state.query);
+    });
+
+    tagsControl.addEventListener('click', (event) => {
+        if (event.target instanceof HTMLButtonElement) {
+            return;
+        }
+
+        tagsTextInput.focus();
+    });
+
+    tagsTextInput.addEventListener('input', () => {
+        if (!tagsTextInput.value.includes(',')) {
+            return;
+        }
+
+        commitCaptureTagInput(captureTagControls, { keepLastFragment: true });
+    });
+
+    tagsTextInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            commitCaptureTagInput(captureTagControls);
+            return;
+        }
+
+        if (event.key === 'Backspace' && !tagsTextInput.value && state.captureTags.length) {
+            removeCaptureTag(state.captureTags.at(-1), captureTagControls);
+        }
+    });
+
+    tagsTextInput.addEventListener('blur', () => {
+        commitCaptureTagInput(captureTagControls);
+    });
+
+    tagsList.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest('.capture-tag-remove')
+            : null;
+
+        if (!(target instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        removeCaptureTag(target.dataset.tag, captureTagControls);
+        tagsTextInput.focus();
+    });
+
+    tagFilters.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest('.tag-filter-pill')
+            : null;
+
+        if (!(target instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        state.activeTagFilter = state.activeTagFilter === target.dataset.tag
+            ? ''
+            : String(target.dataset.tag || '');
+        renderNotesList();
     });
 
     document.addEventListener('keydown', (event) => {
