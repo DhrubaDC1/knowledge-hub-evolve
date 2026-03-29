@@ -16,6 +16,10 @@ const CAPTURE_IMAGE_SUPPORTED_TYPES = new Set([
     'image/png',
     'image/webp'
 ]);
+const CAPTURE_PDF_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const CAPTURE_PDF_SUPPORTED_TYPES = new Set([
+    'application/pdf'
+]);
 const TAG_FILTER_TRANSITION_MS = 320;
 const SUMMARY_REVEAL_RESET_MS = 700;
 const RELATED_NOTES_MAX_RESULTS = 3;
@@ -83,6 +87,24 @@ function createEmptyCaptureImageState() {
     };
 }
 
+function createEmptyCapturePdfState() {
+    return {
+        fileName: '',
+        mimeType: '',
+        dataUrl: '',
+        extractedText: '',
+        summary: '',
+        pageCount: 0,
+        characterCount: 0,
+        isProcessing: false,
+        isDragActive: false,
+        attachToNextNote: false,
+        error: '',
+        statusMessage: '',
+        requestToken: 0
+    };
+}
+
 const state = {
     notes: [],
     query: '',
@@ -101,6 +123,7 @@ const state = {
     searchSource: '',
     searchStatusMessage: '',
     captureImage: createEmptyCaptureImageState(),
+    capturePdf: createEmptyCapturePdfState(),
     resolvedSearchQuery: '',
     activeLibraryView: 'list',
     clusterData: createEmptyClusterData(),
@@ -670,6 +693,14 @@ function formatFileSize(bytes) {
     return `${bytes} B`;
 }
 
+function formatCharacterCount(count) {
+    const normalizedCount = Number.isFinite(Number(count))
+        ? Math.max(0, Math.round(Number(count)))
+        : 0;
+
+    return `${new Intl.NumberFormat('en').format(normalizedCount)} characters`;
+}
+
 function getCaptureImageControls() {
     return {
         fileInput: document.querySelector('#note-image-input'),
@@ -796,6 +827,158 @@ function setCaptureImageState(patch = {}, controls = getCaptureImageControls()) 
 function resetCaptureImageState(controls = getCaptureImageControls()) {
     state.captureImage = createEmptyCaptureImageState();
     renderCaptureImage(controls);
+}
+
+function getCapturePdfControls() {
+    return {
+        fileInput: document.querySelector('#note-pdf-input'),
+        dropzone: document.querySelector('#capture-pdf-dropzone'),
+        fileName: document.querySelector('#capture-pdf-file-name'),
+        status: document.querySelector('#capture-pdf-status'),
+        extractButton: document.querySelector('#capture-pdf-process'),
+        clearButton: document.querySelector('#capture-pdf-clear'),
+        insertButton: document.querySelector('#capture-pdf-insert'),
+        extractedWrap: document.querySelector('#capture-pdf-results'),
+        extractedText: document.querySelector('#capture-pdf-text'),
+        summary: document.querySelector('#capture-pdf-summary'),
+        metadataWrap: document.querySelector('#capture-pdf-meta'),
+        pageCount: document.querySelector('#capture-pdf-page-count'),
+        characterCount: document.querySelector('#capture-pdf-character-count')
+    };
+}
+
+function getDefaultCapturePdfMessage() {
+    return `Drop a PDF here, or choose one to extract text. Max ${formatFileSize(CAPTURE_PDF_MAX_FILE_SIZE_BYTES)}.`;
+}
+
+function getCapturePdfStatusMessage() {
+    if (state.capturePdf.error) {
+        return state.capturePdf.error;
+    }
+
+    if (state.capturePdf.isProcessing) {
+        return state.capturePdf.fileName
+            ? `Extracting text from ${state.capturePdf.fileName}...`
+            : 'Extracting text from the PDF...';
+    }
+
+    if (state.capturePdf.statusMessage) {
+        return state.capturePdf.statusMessage;
+    }
+
+    if (state.capturePdf.dataUrl) {
+        return 'PDF ready. Extract text when you’re ready.';
+    }
+
+    return getDefaultCapturePdfMessage();
+}
+
+function renderCapturePdf(controls = getCapturePdfControls()) {
+    const {
+        fileInput,
+        dropzone,
+        fileName,
+        status,
+        extractButton,
+        clearButton,
+        insertButton,
+        extractedWrap,
+        extractedText,
+        summary,
+        metadataWrap,
+        pageCount,
+        characterCount
+    } = controls;
+    const hasPdf = Boolean(state.capturePdf.dataUrl);
+    const hasText = Boolean(state.capturePdf.extractedText);
+    const hasSummary = Boolean(state.capturePdf.summary);
+    const hasMetadata = state.capturePdf.pageCount > 0 || state.capturePdf.characterCount > 0;
+    const hasResults = hasText || hasSummary || hasMetadata;
+
+    if (dropzone) {
+        dropzone.classList.toggle('is-active', state.capturePdf.isDragActive);
+        dropzone.classList.toggle('has-image', hasPdf);
+        dropzone.classList.toggle('is-processing', state.capturePdf.isProcessing);
+    }
+
+    if (status) {
+        status.textContent = getCapturePdfStatusMessage();
+        status.classList.toggle('is-error', Boolean(state.capturePdf.error));
+    }
+
+    if (fileName) {
+        fileName.hidden = !hasPdf;
+        fileName.textContent = state.capturePdf.fileName;
+    }
+
+    if (extractButton) {
+        extractButton.disabled = !hasPdf || state.capturePdf.isProcessing;
+        extractButton.textContent = state.capturePdf.isProcessing ? 'Extracting...' : 'Extract text';
+    }
+
+    if (clearButton) {
+        clearButton.hidden = !hasPdf;
+        clearButton.disabled = state.capturePdf.isProcessing;
+    }
+
+    if (insertButton) {
+        insertButton.hidden = !hasText;
+        insertButton.disabled = !hasText || state.capturePdf.isProcessing;
+    }
+
+    if (extractedWrap) {
+        extractedWrap.hidden = !hasResults;
+    }
+
+    if (metadataWrap) {
+        metadataWrap.hidden = !hasMetadata;
+    }
+
+    if (pageCount) {
+        pageCount.hidden = state.capturePdf.pageCount <= 0;
+        pageCount.textContent = formatCountLabel(state.capturePdf.pageCount, 'page');
+    }
+
+    if (characterCount) {
+        characterCount.hidden = state.capturePdf.characterCount <= 0;
+        characterCount.textContent = formatCharacterCount(state.capturePdf.characterCount);
+    }
+
+    if (summary) {
+        summary.hidden = !hasSummary;
+        summary.textContent = state.capturePdf.summary;
+    }
+
+    if (extractedText) {
+        extractedText.value = state.capturePdf.extractedText;
+    }
+
+    if (fileInput && !hasPdf && fileInput.value) {
+        fileInput.value = '';
+    }
+}
+
+function setCapturePdfState(patch = {}, controls = getCapturePdfControls()) {
+    state.capturePdf = {
+        ...state.capturePdf,
+        ...patch
+    };
+    renderCapturePdf(controls);
+}
+
+function resetCapturePdfState(controls = getCapturePdfControls()) {
+    state.capturePdf = createEmptyCapturePdfState();
+    renderCapturePdf(controls);
+}
+
+function isSupportedCapturePdfFile(file) {
+    if (!(file instanceof File)) {
+        return false;
+    }
+
+    const mimeType = String(file.type || '').toLowerCase();
+
+    return CAPTURE_PDF_SUPPORTED_TYPES.has(mimeType) || /\.pdf$/i.test(String(file.name || ''));
 }
 
 function isSupportedCaptureImageFile(file) {
@@ -985,6 +1168,193 @@ function insertCaptureImageText(contentInput, controls = getCaptureImageControls
     return true;
 }
 
+async function selectCapturePdf(file, controls = getCapturePdfControls()) {
+    if (!(file instanceof File)) {
+        setCapturePdfState({
+            isDragActive: false,
+            error: 'Choose a PDF file to continue.'
+        }, controls);
+        return false;
+    }
+
+    if (!isSupportedCapturePdfFile(file)) {
+        setCapturePdfState({
+            isDragActive: false,
+            error: 'Use a PDF document.',
+            statusMessage: ''
+        }, controls);
+        return false;
+    }
+
+    if (file.size > CAPTURE_PDF_MAX_FILE_SIZE_BYTES) {
+        setCapturePdfState({
+            isDragActive: false,
+            error: `PDF must be ${formatFileSize(CAPTURE_PDF_MAX_FILE_SIZE_BYTES)} or smaller.`,
+            statusMessage: ''
+        }, controls);
+        return false;
+    }
+
+    try {
+        const dataUrl = await readFileAsDataUrl(file);
+
+        setCapturePdfState({
+            fileName: file.name || 'Uploaded PDF',
+            mimeType: String(file.type || '').toLowerCase() || 'application/pdf',
+            dataUrl,
+            extractedText: '',
+            summary: '',
+            pageCount: 0,
+            characterCount: 0,
+            isProcessing: false,
+            isDragActive: false,
+            attachToNextNote: false,
+            error: '',
+            statusMessage: `${file.name || 'PDF'} ready. Extract text when you’re ready.`,
+            requestToken: 0
+        }, controls);
+
+        return true;
+    } catch (error) {
+        console.error('Failed to read selected PDF.', error);
+        setCapturePdfState({
+            isDragActive: false,
+            error: 'Could not read that PDF. Try another file.',
+            statusMessage: ''
+        }, controls);
+        return false;
+    }
+}
+
+async function requestPdfTextExtraction({ dataUrl, mimeType }) {
+    const pdfBase64 = getBase64PayloadFromDataUrl(dataUrl);
+
+    if (!pdfBase64) {
+        throw new Error('Could not prepare that PDF for processing.');
+    }
+
+    const response = await fetch('/api/process-pdf', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            pdfBase64,
+            mimeType
+        })
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('PDF processing API not found. Run the app with `npm run dev` so Vercel serves `/api/process-pdf`.');
+        }
+
+        throw new Error(payload?.error || 'Could not extract text from that PDF right now.');
+    }
+
+    return {
+        text: typeof payload?.text === 'string' ? payload.text.trim() : '',
+        summary: typeof payload?.summary === 'string' ? payload.summary.trim() : '',
+        pageCount: Number.isFinite(Number(payload?.pageCount))
+            ? Math.max(0, Math.round(Number(payload.pageCount)))
+            : 0
+    };
+}
+
+async function processCapturePdf(controls = getCapturePdfControls()) {
+    if (!state.capturePdf.dataUrl || state.capturePdf.isProcessing) {
+        return false;
+    }
+
+    const requestToken = state.capturePdf.requestToken + 1;
+
+    setCapturePdfState({
+        isProcessing: true,
+        error: '',
+        statusMessage: '',
+        requestToken
+    }, controls);
+
+    try {
+        const { text, summary, pageCount } = await requestPdfTextExtraction({
+            dataUrl: state.capturePdf.dataUrl,
+            mimeType: state.capturePdf.mimeType
+        });
+
+        if (state.capturePdf.requestToken !== requestToken) {
+            return false;
+        }
+
+        const hasText = Boolean(text);
+        const hasSummary = Boolean(summary);
+
+        setCapturePdfState({
+            isProcessing: false,
+            extractedText: text,
+            summary,
+            pageCount,
+            characterCount: text.length,
+            error: '',
+            statusMessage: hasText
+                ? hasSummary
+                    ? 'Text extracted and summarized. Review it below or insert it into your note.'
+                    : 'Text extracted. Review it below or insert it into your note.'
+                : 'No readable text found in that PDF.'
+        }, controls);
+
+        if (hasText && hasSummary) {
+            setFeedback('PDF processed and summarized.');
+        } else if (hasText) {
+            setFeedback('Text extracted from the PDF.');
+        } else {
+            setFeedback('No readable text found in that PDF.');
+        }
+
+        return true;
+    } catch (error) {
+        if (state.capturePdf.requestToken !== requestToken) {
+            return false;
+        }
+
+        console.error('Failed to process capture PDF.', error);
+        setCapturePdfState({
+            isProcessing: false,
+            extractedText: '',
+            summary: '',
+            pageCount: 0,
+            characterCount: 0,
+            attachToNextNote: false,
+            error: error instanceof Error ? error.message : 'Could not extract text from that PDF right now.',
+            statusMessage: ''
+        }, controls);
+        setFeedback('Could not extract text from that PDF.');
+        return false;
+    }
+}
+
+function insertCapturePdfText(contentInput, controls = getCapturePdfControls()) {
+    const extractedText = String(state.capturePdf.extractedText || '').trim();
+
+    if (!(contentInput instanceof HTMLTextAreaElement) || !extractedText) {
+        return false;
+    }
+
+    contentInput.value = mergeTranscriptIntoContent(contentInput.value, extractedText);
+    contentInput.focus();
+    contentInput.setSelectionRange(contentInput.value.length, contentInput.value.length);
+    contentInput.dispatchEvent(new Event('input', { bubbles: true }));
+    setCapturePdfState({
+        attachToNextNote: true,
+        error: '',
+        statusMessage: state.capturePdf.summary
+            ? 'Extracted PDF text and summary are ready for this note.'
+            : 'Extracted PDF text added to your note.'
+    }, controls);
+    setFeedback(state.capturePdf.summary ? 'PDF text inserted. The extracted summary will be saved with the note.' : 'Extracted PDF text added to the note.');
+    return true;
+}
+
 function updateThemeToggle() {
     const themeToggle = document.querySelector('#theme-toggle');
     const themeToggleValue = document.querySelector('#theme-toggle-value');
@@ -1049,6 +1419,7 @@ function createNoteModel(note = {}, overrides = {}) {
     const autoTags = normalizeTags(note.autoTags).filter((tag) => tags.includes(tag));
     const summary = typeof note.summary === 'string' ? note.summary.trim() : '';
     const insights = normalizeInsights(note.insights);
+    const sourceDocument = normalizeSourceDocument(note.sourceDocument);
 
     return {
         id: '',
@@ -1061,6 +1432,7 @@ function createNoteModel(note = {}, overrides = {}) {
         insights,
         tags,
         autoTags,
+        sourceDocument,
         createdAt: '',
         updatedAt: '',
         ...overrides
@@ -1313,6 +1685,32 @@ function normalizeInsights(value) {
     return insights;
 }
 
+function normalizeSourceDocument(value) {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    const kind = value.kind === 'pdf' ? 'pdf' : '';
+    const fileName = typeof value.fileName === 'string' ? value.fileName.trim() : '';
+    const pageCount = Number.isFinite(Number(value.pageCount))
+        ? Math.max(0, Math.round(Number(value.pageCount)))
+        : 0;
+    const characterCount = Number.isFinite(Number(value.characterCount))
+        ? Math.max(0, Math.round(Number(value.characterCount)))
+        : 0;
+
+    if (!kind || (!fileName && pageCount <= 0 && characterCount <= 0)) {
+        return null;
+    }
+
+    return {
+        kind,
+        fileName,
+        pageCount,
+        characterCount
+    };
+}
+
 function serializeTags(tags) {
     return normalizeTags(tags).join(', ');
 }
@@ -1497,11 +1895,34 @@ function createNoteFromInputs({ content, url, tags }) {
     });
 }
 
+function buildCapturePdfNotePatch() {
+    if (!state.capturePdf.attachToNextNote || !state.capturePdf.extractedText) {
+        return null;
+    }
+
+    const title = String(state.capturePdf.fileName || '')
+        .replace(/\.pdf$/i, '')
+        .trim();
+
+    return {
+        title: title || undefined,
+        summary: state.capturePdf.summary || '',
+        sourceDocument: {
+            kind: 'pdf',
+            fileName: state.capturePdf.fileName,
+            pageCount: state.capturePdf.pageCount,
+            characterCount: state.capturePdf.characterCount
+        }
+    };
+}
+
 function buildNoteSearchText(note = {}) {
     return [
         note.title,
         note.content,
+        note.summary,
         note.url,
+        note.sourceDocument?.fileName,
         getSearchableTagText(note)
     ]
         .map((value) => String(value || '').trim().toLowerCase())
@@ -4649,6 +5070,7 @@ function createNoteCard(note, index = 0) {
     const summarizeButton = document.createElement('button');
     const deleteButton = document.createElement('button');
     const linkPreview = document.createElement('div');
+    const sourceMeta = document.createElement('div');
     const bodyText = document.createElement('p');
     const summaryText = document.createElement('p');
     const insightsSection = document.createElement('section');
@@ -4787,6 +5209,38 @@ function createNoteCard(note, index = 0) {
         article.append(linkPreview);
     }
 
+    if (note.sourceDocument?.kind === 'pdf') {
+        sourceMeta.className = 'note-source-meta';
+
+        if (note.sourceDocument.fileName) {
+            const fileName = document.createElement('span');
+
+            fileName.className = 'note-source-chip';
+            fileName.textContent = note.sourceDocument.fileName;
+            sourceMeta.append(fileName);
+        }
+
+        if (note.sourceDocument.pageCount > 0) {
+            const pageCount = document.createElement('span');
+
+            pageCount.className = 'note-source-chip';
+            pageCount.textContent = formatCountLabel(note.sourceDocument.pageCount, 'page');
+            sourceMeta.append(pageCount);
+        }
+
+        if (note.sourceDocument.characterCount > 0) {
+            const characterCount = document.createElement('span');
+
+            characterCount.className = 'note-source-chip';
+            characterCount.textContent = formatCharacterCount(note.sourceDocument.characterCount);
+            sourceMeta.append(characterCount);
+        }
+
+        if (sourceMeta.childElementCount) {
+            article.append(sourceMeta);
+        }
+    }
+
     if (note.content) {
         bodyText.className = 'note-content';
         bodyText.textContent = truncateText(note.content, 200);
@@ -4913,7 +5367,8 @@ function clearCaptureInputs({
     tagsList,
     suggestionsWrap,
     suggestionsList,
-    imageControls
+    imageControls,
+    pdfControls
 }) {
     contentInput.value = '';
     urlInput.value = '';
@@ -4923,6 +5378,7 @@ function clearCaptureInputs({
     renderCaptureTagsInput({ tagsInput, tagsTextInput, tagsList });
     resetCaptureTagSuggestions({ suggestionsWrap, suggestionsList });
     resetCaptureImageState(imageControls);
+    resetCapturePdfState(pdfControls);
 }
 
 function setSaveButtonLabel(label, saveButton) {
@@ -5050,7 +5506,8 @@ async function saveNote({
     suggestionsWrap,
     suggestionsList,
     saveButton,
-    imageControls
+    imageControls,
+    pdfControls
 }) {
     if (speechState.isRecording) {
         await stopSpeechCapture('save');
@@ -5077,7 +5534,13 @@ async function saveNote({
     state.saveButtonLabel = 'Saving...';
     updateSaveButton(saveButton);
 
-    let noteToSave = nextNote;
+    const capturePdfPatch = buildCapturePdfNotePatch();
+    let noteToSave = capturePdfPatch
+        ? {
+            ...nextNote,
+            ...capturePdfPatch
+        }
+        : nextNote;
     let successMessage = 'Saved.';
     let linkMetadataErrorMessage = '';
     let summaryErrorMessage = '';
@@ -5098,7 +5561,7 @@ async function saveNote({
             }
         }
 
-        if (state.captureAutoSummarize && noteToSave.content) {
+        if (state.captureAutoSummarize && noteToSave.content && !noteToSave.summary) {
             setFeedback('Saving and summarizing...');
             setSaveButtonLabel('Saving...', saveButton);
             noteToSave = {
@@ -5109,6 +5572,12 @@ async function saveNote({
             successMessage = linkMetadataErrorMessage
                 ? `Saved and summarized. Link info unavailable, so the raw URL was saved.`
                 : 'Saved and summarized.';
+        } else if (noteToSave.summary) {
+            setFeedback(linkMetadataErrorMessage ? 'Saving with PDF summary and raw URL...' : 'Saving with PDF summary...');
+            setSaveButtonLabel('Saving...', saveButton);
+            successMessage = linkMetadataErrorMessage
+                ? 'Saved with PDF summary and raw URL.'
+                : 'Saved with PDF summary.';
         } else {
             setFeedback(linkMetadataErrorMessage ? 'Saving with raw URL...' : 'Saving...');
             setSaveButtonLabel('Saving...', saveButton);
@@ -5151,7 +5620,8 @@ async function saveNote({
             tagsList,
             suggestionsWrap,
             suggestionsList,
-            imageControls
+            imageControls,
+            pdfControls
         });
         invalidateRelatedNotesCache();
         contentInput.focus();
@@ -5352,6 +5822,46 @@ function renderHomePage() {
                                 </div>
                             </section>
 
+                            <section class="field field-document" aria-labelledby="capture-pdf-label">
+                                <div class="field-label-row">
+                                    <span id="capture-pdf-label">PDF extraction</span>
+                                    <input id="note-pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+                                    <button id="capture-pdf-process" class="secondary-button" type="button" disabled>Extract text</button>
+                                </div>
+
+                                <div
+                                    id="capture-pdf-dropzone"
+                                    class="image-dropzone"
+                                    aria-describedby="capture-pdf-status"
+                                >
+                                    <div class="image-dropzone-copy">
+                                        <p class="image-dropzone-title">Drop a PDF here</p>
+                                        <p class="image-dropzone-text">PDF files up to 10 MB. Long documents get an automatic summary after text extraction.</p>
+                                    </div>
+
+                                    <div class="image-dropzone-actions">
+                                        <button id="capture-pdf-select" class="secondary-button" type="button">Choose PDF</button>
+                                        <button id="capture-pdf-clear" class="ghost-button" type="button" hidden>Remove</button>
+                                    </div>
+                                </div>
+
+                                <p id="capture-pdf-status" class="image-upload-status" aria-live="polite">Drop a PDF here, or choose one to extract text. Max 10.0 MB.</p>
+                                <p id="capture-pdf-file-name" class="image-file-name" hidden></p>
+
+                                <div id="capture-pdf-results" class="field image-results" hidden>
+                                    <div id="capture-pdf-meta" class="capture-pdf-meta" hidden>
+                                        <span id="capture-pdf-page-count" class="capture-pdf-chip" hidden></span>
+                                        <span id="capture-pdf-character-count" class="capture-pdf-chip" hidden></span>
+                                    </div>
+                                    <p id="capture-pdf-summary" class="capture-pdf-summary" hidden></p>
+                                    <span>Extracted text</span>
+                                    <textarea id="capture-pdf-text" rows="8" readonly placeholder="Extracted PDF text will appear here."></textarea>
+                                    <div class="capture-image-actions">
+                                        <button id="capture-pdf-insert" class="ghost-button" type="button" hidden>Insert into note</button>
+                                    </div>
+                                </div>
+                            </section>
+
                             <div class="field-row">
                                 <label class="field">
                                     <span>Link</span>
@@ -5459,6 +5969,12 @@ function renderHomePage() {
     const imageProcessButton = document.querySelector('#capture-image-process');
     const imageClearButton = document.querySelector('#capture-image-clear');
     const imageInsertButton = document.querySelector('#capture-image-insert');
+    const pdfInput = document.querySelector('#note-pdf-input');
+    const pdfDropzone = document.querySelector('#capture-pdf-dropzone');
+    const pdfSelectButton = document.querySelector('#capture-pdf-select');
+    const pdfProcessButton = document.querySelector('#capture-pdf-process');
+    const pdfClearButton = document.querySelector('#capture-pdf-clear');
+    const pdfInsertButton = document.querySelector('#capture-pdf-insert');
     const tagsInput = document.querySelector('#note-tags');
     const tagsTextInput = document.querySelector('#note-tags-input');
     const tagsList = document.querySelector('#capture-tags-list');
@@ -5474,6 +5990,7 @@ function renderHomePage() {
     const timelineView = document.querySelector('#timeline-view');
     const themeToggle = document.querySelector('#theme-toggle');
     const captureImageControls = getCaptureImageControls();
+    const capturePdfControls = getCapturePdfControls();
     const captureTagControls = {
         tagsInput,
         tagsTextInput,
@@ -5487,6 +6004,7 @@ function renderHomePage() {
     renderCaptureTagsInput(captureTagControls);
     renderCaptureTagSuggestions(captureTagControls);
     renderCaptureImage(captureImageControls);
+    renderCapturePdf(capturePdfControls);
     applyThemePreference();
     speechState.statusMessage = getSpeechDefaultMessage();
     updateSpeechUi();
@@ -5516,7 +6034,8 @@ function renderHomePage() {
                 suggestionsWrap: tagSuggestions,
                 suggestionsList: tagSuggestionsList,
                 saveButton,
-                imageControls: captureImageControls
+                imageControls: captureImageControls,
+                pdfControls: capturePdfControls
             });
         } catch (error) {
             console.error('Failed to save note.', error);
@@ -5576,6 +6095,43 @@ function renderHomePage() {
         insertCaptureImageText(contentInput, captureImageControls);
     });
 
+    pdfSelectButton?.addEventListener('click', () => {
+        pdfInput?.click();
+    });
+
+    pdfDropzone?.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement ? event.target.closest('button') : null;
+
+        if (target) {
+            return;
+        }
+
+        pdfInput?.click();
+    });
+
+    pdfInput?.addEventListener('change', async (event) => {
+        const file = event.target instanceof HTMLInputElement ? event.target.files?.[0] : null;
+
+        if (!file) {
+            return;
+        }
+
+        await selectCapturePdf(file, capturePdfControls);
+    });
+
+    pdfProcessButton?.addEventListener('click', async () => {
+        await processCapturePdf(capturePdfControls);
+    });
+
+    pdfClearButton?.addEventListener('click', () => {
+        resetCapturePdfState(capturePdfControls);
+        setFeedback('PDF cleared.');
+    });
+
+    pdfInsertButton?.addEventListener('click', () => {
+        insertCapturePdfText(contentInput, capturePdfControls);
+    });
+
     if (imageDropzone) {
         let dragDepth = 0;
 
@@ -5608,6 +6164,41 @@ function renderHomePage() {
             }
 
             await selectCaptureImage(file, captureImageControls);
+        });
+    }
+
+    if (pdfDropzone) {
+        let dragDepth = 0;
+
+        ['dragenter', 'dragover'].forEach((eventName) => {
+            pdfDropzone.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                dragDepth += eventName === 'dragenter' ? 1 : 0;
+                setCapturePdfState({ isDragActive: true }, capturePdfControls);
+            });
+        });
+
+        pdfDropzone.addEventListener('dragleave', (event) => {
+            event.preventDefault();
+            dragDepth = Math.max(0, dragDepth - 1);
+
+            if (dragDepth === 0) {
+                setCapturePdfState({ isDragActive: false }, capturePdfControls);
+            }
+        });
+
+        pdfDropzone.addEventListener('drop', async (event) => {
+            event.preventDefault();
+            dragDepth = 0;
+
+            const file = event.dataTransfer?.files?.[0] || null;
+
+            if (!file) {
+                setCapturePdfState({ isDragActive: false }, capturePdfControls);
+                return;
+            }
+
+            await selectCapturePdf(file, capturePdfControls);
         });
     }
 

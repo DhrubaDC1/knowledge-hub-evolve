@@ -10,6 +10,7 @@ import { readJournalData } from './lib/journal.js';
 import { clusterNotesByOverlappingTags } from './public/cluster.js';
 import { createExternalNote } from './lib/save-external.js';
 import { extractTextFromImage } from './lib/process-image.js';
+import { extractTextFromPdf } from './lib/process-pdf.js';
 import { searchNotes } from './lib/search.js';
 import { suggestTags } from './lib/suggest-tags.js';
 import { MAX_TEXT_LENGTH, summarizeText } from './lib/summarize.js';
@@ -287,6 +288,42 @@ async function handleProcessImage(req, res) {
     }
 }
 
+async function handleProcessPdf(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const pdfBase64 = typeof body.pdfBase64 === 'string' ? body.pdfBase64.trim() : '';
+    const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim() : '';
+
+    if (!pdfBase64) {
+        return sendJson(res, 400, { error: 'PDF data is required.' });
+    }
+
+    try {
+        const payload = await extractTextFromPdf({ pdfBase64, mimeType });
+        return sendJson(res, 200, payload);
+    } catch (error) {
+        console.error('Failed to process PDF.', error);
+        return sendJson(res, error?.statusCode || 500, {
+            error: error instanceof Error ? error.message : 'Failed to process PDF.'
+        });
+    }
+}
+
 async function handleJournal(req, res) {
     setCorsHeaders(res);
 
@@ -403,6 +440,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/process-image') {
         await handleProcessImage(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/process-pdf') {
+        await handleProcessPdf(req, res);
         return;
     }
 

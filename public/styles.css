@@ -604,7 +604,8 @@ a {
     box-shadow: none;
 }
 
-.field-image {
+.field-image,
+.field-document {
     gap: var(--space-4);
 }
 
@@ -698,6 +699,34 @@ a {
 
 .image-results textarea {
     min-height: 180px;
+}
+
+.capture-pdf-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.capture-pdf-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.22rem 0.62rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-soft) 46%, transparent);
+    color: var(--accent-strong);
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.capture-pdf-summary {
+    padding: var(--space-4);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--surface-strong) 90%, var(--accent-soft));
+    color: var(--text);
+    white-space: pre-wrap;
 }
 
 .field input::placeholder,
@@ -1902,6 +1931,25 @@ a {
 .note-content {
     white-space: pre-wrap;
     color: var(--text);
+}
+
+.note-source-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.note-source-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.22rem 0.62rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-muted) 94%, transparent);
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    font-weight: 700;
 }
 
 .note-summary {

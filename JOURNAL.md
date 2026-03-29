@@ -117,3 +117,7 @@ _Bootstrapped from existing automation logs on 2026-03-29T14:07:56+06:00._
 - 2026-03-29T17:42:59+06:00 [push] pushed branch `evolve/mvp-mvp-capture-recall` to origin.
 - 2026-03-29T17:42:59+06:00 [task] completed `p4-voice`: Voice note capture
 - 2026-03-29T17:43:15+06:00 [task] started `p4-image` on branch `evolve/mvp-mvp-capture-recall`: Image upload and OCR
+- 2026-03-29T17:50:50+06:00 [commit] created commit `evolve(p4-image): Image upload and OCR`.
+- 2026-03-29T17:50:51+06:00 [push] pushed branch `evolve/mvp-mvp-capture-recall` to origin.
+- 2026-03-29T17:50:51+06:00 [task] completed `p4-image`: Image upload and OCR
+- 2026-03-29T17:51:08+06:00 [task] started `p4-pdf` on branch `evolve/mvp-mvp-capture-recall`: PDF upload and extraction

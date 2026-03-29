@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `phase4-multimodal`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `20`
+- Completed tasks: `21`
 - Completed issues: `2`
 
 ## Implemented
@@ -37,13 +37,14 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `p3-clustering`: Topic clustering
 - `p4-voice`: Voice note capture
 - `p4-image`: Image upload and OCR
+- `p4-pdf`: PDF upload and extraction
 
 ## Recent Changes
+- `00edd22 evolve(p4-image): Image upload and OCR`
 - `5e2f131 evolve(p4-voice): Voice note capture`
 - `fc150d9 fix(issue-3): Replace remaining OpenAI usage with Gemini across the repo`
 - `c32ad08 evolve(p3-clustering): Topic clustering`
 - `2483199 evolve(p3-timeline): Learning timeline`
-- `c80efe1 evolve(p3-graph-view): Force-directed graph visualization`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
@@ -51,7 +52,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
 - Next manifest task candidate: `p2-key-insights` in phase `phase2-intelligence` — Key insight extraction
 - Next manifest task candidate: `p2-chrome-extension` in phase `phase2-intelligence` — Chrome extension scaffold
-- Next manifest task candidate: `p4-pdf` in phase `phase4-multimodal` — PDF upload and extraction
+- Next manifest task candidate: `p5-patterns` in phase `phase5-insights` — Learning pattern analysis
 
 ## Resolved Issues
 - `#2`
