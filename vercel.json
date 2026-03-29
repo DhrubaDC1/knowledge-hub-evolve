@@ -5,7 +5,11 @@
       "runtime": "nodejs18.x"
     }
   },
-  "rewrites": [{ "source": "/api/(.*)", "destination": "/api/$1" }],
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/journal", "destination": "/" },
+    { "source": "/journal/", "destination": "/" }
+  ],
   "headers": [{
     "source": "/api/(.*)",
     "headers": [

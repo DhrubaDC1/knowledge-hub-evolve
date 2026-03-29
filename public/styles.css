@@ -229,6 +229,13 @@ a {
     flex-wrap: wrap;
 }
 
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
 .eyebrow,
 .panel-kicker {
     color: var(--accent-strong);
@@ -236,6 +243,36 @@ a {
     font-weight: 800;
     letter-spacing: 0.18em;
     text-transform: uppercase;
+}
+
+.secondary-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.9rem;
+    padding: 0.72rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-strong);
+    color: var(--text);
+    font-size: 0.9rem;
+    font-weight: 700;
+    box-shadow: var(--shadow-sm);
+    transition:
+        transform 160ms ease,
+        border-color 160ms ease,
+        background-color 160ms ease,
+        box-shadow 160ms ease,
+        color 160ms ease;
+}
+
+.secondary-link:hover,
+.secondary-link:focus-visible {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+    background: color-mix(in srgb, var(--surface-strong) 92%, var(--accent-soft));
+    color: var(--accent-strong);
+    box-shadow: var(--shadow-card-hover);
 }
 
 .theme-toggle {
@@ -290,6 +327,23 @@ a {
     max-width: 11ch;
     font-size: clamp(2.8rem, 6vw, 5.6rem);
     line-height: 0.92;
+    letter-spacing: -0.06em;
+}
+
+.page-header-panel {
+    display: grid;
+    gap: var(--space-6);
+    animation: rise-in 460ms ease both;
+}
+
+.page-header-copy {
+    display: grid;
+    gap: var(--space-4);
+}
+
+.page-title {
+    font-size: clamp(2.8rem, 6vw, 4.8rem);
+    line-height: 0.95;
     letter-spacing: -0.06em;
 }
 
@@ -442,7 +496,8 @@ a {
 .primary-button:focus-visible,
 .note-summarize:focus-visible,
 .note-delete:focus-visible,
-.note-link:focus-visible {
+.note-link:focus-visible,
+.note-tag-remove:focus-visible {
     outline: none;
     border-color: var(--accent);
     box-shadow:
@@ -913,6 +968,18 @@ a {
     font-weight: 700;
 }
 
+.note-auto-tag-indicator {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.18rem 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-soft) 36%, transparent);
+    color: var(--accent-strong);
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
 .note-type {
     display: inline-flex;
     align-items: center;
@@ -1075,6 +1142,9 @@ a {
 }
 
 .note-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
     padding: 0.28rem 0.62rem;
     border: 1px solid hsl(var(--tag-hue, 172) 55% 45% / var(--tag-pill-border-alpha));
     border-radius: 999px;
@@ -1082,6 +1152,50 @@ a {
     color: hsl(var(--tag-hue, 172) 52% var(--tag-pill-text-lightness));
     font-size: 0.74rem;
     font-weight: 700;
+}
+
+.note-tag-label {
+    overflow-wrap: anywhere;
+}
+
+.note-tag-auto {
+    background: hsl(var(--tag-hue, 172) 75% 50% / var(--tag-pill-active-bg-alpha));
+}
+
+.note-tag-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.1rem;
+    padding: 0 0.34rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.58);
+    color: inherit;
+    font-size: 0.64rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.note-tag-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15rem;
+    height: 1.15rem;
+    padding: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.54);
+    color: inherit;
+    font-size: 0.82rem;
+    line-height: 1;
+    flex: none;
+}
+
+.note-tag-remove:hover,
+.note-tag-remove:focus-visible {
+    background: rgba(255, 255, 255, 0.74);
+    transform: translateY(-1px);
 }
 
 .note-tag-muted {
@@ -1523,6 +1637,14 @@ a:active {
     }
 
     .theme-toggle {
+        width: 100%;
+    }
+
+    .header-actions {
+        width: 100%;
+    }
+
+    .secondary-link {
         width: 100%;
     }
 

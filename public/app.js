@@ -276,6 +276,7 @@ function createNoteModel(note = {}, overrides = {}) {
         ? note.title.trim()
         : deriveTitle({ content, url, type });
     const tags = normalizeTags(note.tags);
+    const autoTags = normalizeTags(note.autoTags).filter((tag) => tags.includes(tag));
     const summary = typeof note.summary === 'string' ? note.summary.trim() : '';
 
     return {
@@ -287,6 +288,7 @@ function createNoteModel(note = {}, overrides = {}) {
         title,
         summary,
         tags,
+        autoTags,
         createdAt: '',
         updatedAt: '',
         ...overrides
@@ -351,7 +353,10 @@ function formatRelativeTime(dateValue) {
 }
 
 function formatJournalDate(dateValue) {
-    const date = new Date(dateValue);
+    const normalizedValue = /^\d{4}-\d{2}-\d{2}$/.test(String(dateValue || ''))
+        ? `${dateValue}T12:00:00Z`
+        : dateValue;
+    const date = new Date(normalizedValue);
 
     if (Number.isNaN(date.getTime())) {
         return '';
@@ -798,6 +803,15 @@ function resetSearchState() {
     state.resolvedSearchQuery = '';
 }
 
+function refreshVisibleNotes() {
+    if (state.query.trim()) {
+        scheduleSearch(state.query, { immediate: true });
+        return;
+    }
+
+    renderNotesList();
+}
+
 async function requestSearchResults(query, notes) {
     const response = await fetch('/api/search', {
         method: 'POST',
@@ -1094,11 +1108,36 @@ function setFeedback(message) {
     }
 }
 
-function createTagPill(tag) {
+function createTagPill(tag, options = {}) {
     const pill = document.createElement('span');
+    const label = document.createElement('span');
+
     pill.className = 'note-tag';
-    pill.textContent = tag;
+    label.className = 'note-tag-label';
+    label.textContent = tag;
+    pill.append(label);
     setTagTone(tag, pill);
+
+    if (options.isAuto && options.noteId) {
+        const badge = document.createElement('span');
+        const removeButton = document.createElement('button');
+
+        pill.classList.add('note-tag-auto');
+
+        badge.className = 'note-tag-badge';
+        badge.textContent = 'Auto';
+        badge.setAttribute('aria-hidden', 'true');
+
+        removeButton.className = 'note-tag-remove';
+        removeButton.type = 'button';
+        removeButton.dataset.noteId = options.noteId;
+        removeButton.dataset.tag = tag;
+        removeButton.setAttribute('aria-label', `Remove auto-tag ${tag}`);
+        removeButton.textContent = '×';
+
+        pill.append(badge, removeButton);
+    }
+
     return pill;
 }
 
@@ -1726,6 +1765,17 @@ function createNoteCard(note, index = 0) {
         meta.append(relevance);
     }
 
+    if (note.autoTags.length) {
+        const autoTagIndicator = document.createElement('span');
+
+        autoTagIndicator.className = 'note-auto-tag-indicator';
+        autoTagIndicator.textContent = note.autoTags.length === 1
+            ? '1 auto-tag'
+            : `${note.autoTags.length} auto-tags`;
+        autoTagIndicator.title = 'AI-suggested tags can be removed.';
+        meta.append(autoTagIndicator);
+    }
+
     actions.className = 'note-actions';
 
     if (canSummarize) {
@@ -1822,7 +1872,12 @@ function createNoteCard(note, index = 0) {
     tags.className = 'note-tags';
 
     if (note.tags.length) {
-        note.tags.forEach((tag) => tags.append(createTagPill(tag)));
+        note.tags.forEach((tag) => {
+            tags.append(createTagPill(tag, {
+                isAuto: note.autoTags.includes(tag),
+                noteId: note.id
+            }));
+        });
     } else {
         const emptyTag = document.createElement('span');
         emptyTag.className = 'note-tag note-tag-muted';
@@ -1865,6 +1920,67 @@ function updateSaveButton(saveButton) {
 
     saveButton.disabled = state.isSavingNote;
     saveButton.textContent = state.isSavingNote ? state.saveButtonLabel : 'Save';
+}
+
+async function autoTagSavedNote(noteId) {
+    const savedNote = Storage.getById(noteId);
+
+    if (!savedNote || !hasMeaningfulContentForTagSuggestions(savedNote.content)) {
+        return [];
+    }
+
+    try {
+        const suggestedTags = await requestTagSuggestions(savedNote.content, savedNote.tags);
+        const latestNote = Storage.getById(noteId);
+
+        if (!latestNote) {
+            return [];
+        }
+
+        const addedTags = suggestedTags.filter((tag) => !latestNote.tags.includes(tag));
+
+        if (!addedTags.length) {
+            return [];
+        }
+
+        const updatedNote = Storage.update(noteId, {
+            tags: normalizeTags([...latestNote.tags, ...addedTags]),
+            autoTags: normalizeTags([...latestNote.autoTags, ...addedTags])
+        });
+
+        if (!updatedNote) {
+            return [];
+        }
+
+        setFeedback(`Saved. Added ${formatCountLabel(addedTags.length, 'auto-tag')}.`);
+        refreshVisibleNotes();
+        return addedTags;
+    } catch (error) {
+        console.error('Failed to auto-tag saved note.', error);
+        return [];
+    }
+}
+
+function removeAutoTag(noteId, tag) {
+    const normalizedTag = normalizeTag(tag);
+    const note = Storage.getById(noteId);
+
+    if (!normalizedTag || !note || !note.autoTags.includes(normalizedTag)) {
+        return false;
+    }
+
+    const updatedNote = Storage.update(noteId, {
+        tags: note.tags.filter((entry) => entry !== normalizedTag),
+        autoTags: note.autoTags.filter((entry) => entry !== normalizedTag)
+    });
+
+    if (!updatedNote) {
+        return false;
+    }
+
+    setFeedback(`Removed auto-tag "${normalizedTag}".`);
+    refreshVisibleNotes();
+    return true;
 }
 
 async function summarizeNote(noteId) {
@@ -2013,12 +2129,8 @@ async function saveNote({
         });
         contentInput.focus();
         setFeedback(successMessage);
-
-        if (state.query.trim()) {
-            scheduleSearch(state.query, { immediate: true });
-        } else {
-            renderNotesList();
-        }
+        refreshVisibleNotes();
+        void autoTagSavedNote(savedNote.id);
 
         return true;
     } finally {
@@ -2057,7 +2169,47 @@ function renderNotesList() {
     notesList.replaceChildren(fragment);
 }
 
-function renderApp() {
+function getCurrentPage() {
+    const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
+
+    if (pathname === '/journal') {
+        return 'journal';
+    }
+
+    return 'home';
+}
+
+function renderJournalPanelMarkup() {
+    return `
+        <section class="panel journal-panel">
+            <div class="journal-header">
+                <div class="journal-title-group">
+                    <p class="panel-kicker">// journal</p>
+                    <h2 id="journal-panel-title" class="panel-title">Evolution journal</h2>
+                    <p id="journal-panel-copy" class="panel-copy">Structured from JOURNAL.md as a running development log.</p>
+                </div>
+            </div>
+
+            <div id="journal-stats" class="journal-stats" aria-label="Journal snapshot"></div>
+
+            <div class="journal-grid">
+                <div class="journal-timeline-shell">
+                    <p id="journal-status" class="journal-status" aria-live="polite">Loading journal...</p>
+                    <div id="journal-timeline" class="journal-timeline" aria-live="polite"></div>
+                </div>
+
+                <aside class="journal-sidebar">
+                    <div class="journal-sidebar-card">
+                        <p class="journal-sidebar-label">Recent git history</p>
+                        <ul id="journal-git-history" class="journal-git-history"></ul>
+                    </div>
+                </aside>
+            </div>
+        </section>
+    `;
+}
+
+function renderHomePage() {
     app.innerHTML = `
         <main class="shell">
             <div class="app-grid">
@@ -2065,10 +2217,13 @@ function renderApp() {
                     <header class="panel hero-panel">
                         <div class="hero-topbar">
                             <p class="eyebrow">Knowledge Hub</p>
-                            <button id="theme-toggle" class="theme-toggle" type="button">
-                                <span class="theme-toggle-label">Theme</span>
-                                <span id="theme-toggle-value" class="theme-toggle-value">Light mode</span>
-                            </button>
+                            <div class="header-actions">
+                                <a class="secondary-link" href="/journal">Open journal</a>
+                                <button id="theme-toggle" class="theme-toggle" type="button">
+                                    <span class="theme-toggle-label">Theme</span>
+                                    <span id="theme-toggle-value" class="theme-toggle-value">Light mode</span>
+                                </button>
+                            </div>
                         </div>
                         <h1>Capture what matters. Revisit it with clarity.</h1>
                         <p class="hero-copy">A calm, modern workspace for notes, links, and AI summaries that stays readable in light and dark themes.</p>
@@ -2167,32 +2322,6 @@ function renderApp() {
                     <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
 
                     <div id="notes-list" class="notes-list" aria-live="polite"></div>
-                </section>
-
-                <section class="panel journal-panel">
-                    <div class="journal-header">
-                        <div class="journal-title-group">
-                            <p class="panel-kicker">// journal</p>
-                            <h2 id="journal-panel-title" class="panel-title">Evolution journal</h2>
-                            <p id="journal-panel-copy" class="panel-copy">Structured from JOURNAL.md as a running development log.</p>
-                        </div>
-                    </div>
-
-                    <div id="journal-stats" class="journal-stats" aria-label="Journal snapshot"></div>
-
-                    <div class="journal-grid">
-                        <div class="journal-timeline-shell">
-                            <p id="journal-status" class="journal-status" aria-live="polite">Loading journal...</p>
-                            <div id="journal-timeline" class="journal-timeline" aria-live="polite"></div>
-                        </div>
-
-                        <aside class="journal-sidebar">
-                            <div class="journal-sidebar-card">
-                                <p class="journal-sidebar-label">Recent git history</p>
-                                <ul id="journal-git-history" class="journal-git-history"></ul>
-                            </div>
-                        </aside>
-                    </div>
                 </section>
             </div>
         </main>
@@ -2363,11 +2492,21 @@ function renderApp() {
             return;
         }
 
-        if (!target.matches('.note-delete')) {
-            return;
-        }
-
         try {
+            if (target.matches('.note-tag-remove')) {
+                const removed = removeAutoTag(target.dataset.noteId, target.dataset.tag);
+
+                if (!removed) {
+                    setFeedback('That auto-tag could not be removed.');
+                }
+
+                return;
+            }
+
+            if (!target.matches('.note-delete')) {
+                return;
+            }
+
             const deleted = Storage.delete(target.dataset.noteId);
 
             if (!deleted) {
@@ -2377,12 +2516,7 @@ function renderApp() {
 
             setFeedback('Deleted.');
             clearNoteUiState(target.dataset.noteId);
-
-            if (state.query.trim()) {
-                scheduleSearch(state.query, { immediate: true });
-            } else {
-                renderNotesList();
-            }
+            refreshVisibleNotes();
         } catch (error) {
             console.error('Failed to delete note.', error);
             setFeedback('That note could not be deleted.');
@@ -2390,8 +2524,55 @@ function renderApp() {
     });
 
     renderNotesList();
+}
+
+function renderJournalPage() {
+    app.innerHTML = `
+        <main class="shell">
+            <div class="app-grid">
+                <header class="panel page-header-panel">
+                    <div class="hero-topbar">
+                        <p class="eyebrow">Knowledge Hub</p>
+                        <div class="header-actions">
+                            <a class="secondary-link" href="/">Back to home</a>
+                            <button id="theme-toggle" class="theme-toggle" type="button">
+                                <span class="theme-toggle-label">Theme</span>
+                                <span id="theme-toggle-value" class="theme-toggle-value">Light mode</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="page-header-copy">
+                        <p class="panel-kicker">// journal</p>
+                        <h1 class="page-title">Evolution journal</h1>
+                        <p class="hero-copy">A dedicated timeline view for the autonomous build log, grouped by day and kept separate from the capture workspace.</p>
+                    </div>
+                </header>
+
+                ${renderJournalPanelMarkup()}
+            </div>
+        </main>
+    `;
+
+    const themeToggle = document.querySelector('#theme-toggle');
+
+    applyThemePreference();
+
+    themeToggle?.addEventListener('click', () => {
+        toggleThemePreference();
+    });
+
     renderJournalSection();
     void loadJournal();
+}
+
+function renderApp() {
+    if (getCurrentPage() === 'journal') {
+        renderJournalPage();
+        return;
+    }
+
+    renderHomePage();
 }
 
 themeMediaQuery.addEventListener('change', () => {

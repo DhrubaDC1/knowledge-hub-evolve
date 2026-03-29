@@ -11,9 +11,9 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Automation workflow that prioritizes GitHub issues before new feature work
 
 ## Status
-- Current phase: `mvp`
+- Current phase: `phase2-intelligence`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `12`
+- Completed tasks: `13`
 - Completed issues: `1`
 
 ## Implemented
@@ -29,21 +29,22 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `mvp-tag-suggestions-api`: AI tag suggestions
 - `mvp-tag-suggestions-ui`: Tag suggestions in capture form
 - `mvp-deploy-check`: Deployment verification
+- `p2-auto-tag`: Auto-tag on save
 
 ## Recent Changes
+- `c360894 evolve(mvp-deploy-check): Deployment verification`
 - `0b64630 fix(issue-2): untagged ui is broken`
 - `e94d291 evolve(mvp-tag-suggestions-ui): Tag suggestions in capture form`
 - `7df55f1 evolve(mvp-tag-suggestions-api): AI tag suggestions`
 - `f1f50f2 evolve(mvp-tags-ui): Tag system refinement`
-- `db8d951 evolve(mvp-search-ui): Semantic search interface`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
-- Next manifest task candidate: `p2-auto-tag` in phase `phase2-intelligence` — Auto-tag on save
 - Next manifest task candidate: `p2-related-notes` in phase `phase2-intelligence` — Related notes suggestions
 - Next manifest task candidate: `p2-key-insights` in phase `phase2-intelligence` — Key insight extraction
+- Next manifest task candidate: `p2-chrome-extension` in phase `phase2-intelligence` — Chrome extension scaffold
 
 ## Resolved Issues
 - `#2`

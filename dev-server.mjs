@@ -234,7 +234,8 @@ async function handleJournal(req, res) {
 }
 
 async function handleStaticAsset(req, res, pathname) {
-    const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const isAppRoute = pathname === '/' || pathname === '/journal' || pathname === '/journal/';
+    const relativePath = isAppRoute ? 'index.html' : pathname.replace(/^\/+/, '');
     const assetPath = path.resolve(PUBLIC_DIR, relativePath);
 
     if (!assetPath.startsWith(PUBLIC_DIR)) {
