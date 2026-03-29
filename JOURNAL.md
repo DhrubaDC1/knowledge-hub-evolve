@@ -1,0 +1,34 @@
+# Knowledge Hub Journal
+
+_Bootstrapped from existing automation logs on 2026-03-29T14:07:56+06:00._
+
+## Reconstructed Timeline
+- 2026-03-29T12:29:03+06:00: initial scaffold commit created (`84e7b3c`), establishing the Vercel/vanilla JS project structure.
+- 2026-03-29T12:38:18+06:00: `mvp-capture-ui` failed after repeated validation misses during early autonomous runs.
+- 2026-03-29T12:41:00+06:00: `mvp-capture-ui` completed and was committed as `6440bbe`.
+- 2026-03-29T13:24:14+06:00: `mvp-storage-layer` completed and was committed as `cae443e`.
+- 2026-03-29T13:26:30+06:00: `mvp-summarize-api` completed and was committed as `22b70b8`.
+- 2026-03-29T13:48:09+06:00: summarization was migrated from OpenAI to Gemini, and local dev API routing was fixed in commit `863dc96`.
+
+## Current State Snapshot
+- Phase: `mvp`
+- Task index: `4`
+- Completed tasks: `mvp-capture-ui, mvp-scaffold, mvp-storage-layer, mvp-summarize-api`
+- Failed tasks: ``
+- Completed issues: ``
+- Failed issues: ``
+- Iterations: `16`
+- Commits: `3`
+
+## Recent Git History
+- `863dc96 Switch summarization to Gemini and fix local dev API`
+- `22b70b8 evolve(mvp-summarize-api): AI summarization serverless function`
+- `cae443e evolve(mvp-storage-layer): LocalStorage persistence`
+- `6440bbe evolve(mvp-capture-ui): Capture interface`
+- `84e7b3c initial scaffold`
+
+## Live Timeline
+- 2026-03-29T14:07:56+06:00 [journal] bootstrapped this journal from `logs/evolution.log` and the app git history.
+- 2026-03-29T14:12:04+06:00 [session] autonomous evolution started with model `gpt-5.4` and max retries `3`.
+- 2026-03-29T14:12:05+06:00 [branch] created branch `evolve/mvp-mvp-capture-recall` for manifest task mvp-summarize-ui.
+- 2026-03-29T14:12:05+06:00 [task] started `mvp-summarize-ui` on branch `evolve/mvp-mvp-capture-recall`: Summarize button and flow
