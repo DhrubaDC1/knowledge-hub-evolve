@@ -5,6 +5,8 @@ const THEME_COLORS = {
     dark: '#071018'
 };
 const SEARCH_DEBOUNCE_MS = 300;
+const TAG_SUGGESTIONS_DEBOUNCE_MS = 1000;
+const TAG_SUGGESTIONS_MIN_CONTENT_LENGTH = 20;
 const app = document.querySelector('#app');
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -14,6 +16,7 @@ const state = {
     query: '',
     activeTagFilter: '',
     captureTags: [],
+    captureSuggestedTags: [],
     feedback: '',
     captureAutoSummarize: false,
     isSavingNote: false,
@@ -27,6 +30,8 @@ const state = {
     resolvedSearchQuery: '',
     searchRequestToken: 0,
     searchDebounceTimer: null,
+    tagSuggestionsRequestToken: 0,
+    tagSuggestionsDebounceTimer: null,
     themePreference: readThemePreference(),
     activeTheme: 'light'
 };
@@ -603,6 +608,45 @@ function clearScheduledSearch() {
     }
 }
 
+function clearScheduledTagSuggestions() {
+    if (state.tagSuggestionsDebounceTimer) {
+        window.clearTimeout(state.tagSuggestionsDebounceTimer);
+        state.tagSuggestionsDebounceTimer = null;
+    }
+}
+
+function hasMeaningfulContentForTagSuggestions(content) {
+    return String(content || '').trim().length > TAG_SUGGESTIONS_MIN_CONTENT_LENGTH;
+}
+
+async function requestTagSuggestions(content, existingTags) {
+    const response = await fetch('/api/suggest-tags', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ content, existingTags })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Tag suggestion API not found. Run the app with `npm run dev` so Vercel serves `/api/suggest-tags`.');
+        }
+
+        throw new Error(payload?.error || 'Could not suggest tags right now.');
+    }
+
+    return Array.isArray(payload?.tags) ? normalizeTags(payload.tags) : [];
+}
+
 function resetSearchState() {
     clearScheduledSearch();
     state.isSearching = false;
@@ -930,6 +974,19 @@ function createTagFilterPill(tag) {
     return pill;
 }
 
+function createSuggestedTagPill(tag) {
+    const pill = document.createElement('button');
+
+    pill.className = 'suggested-tag-pill';
+    pill.type = 'button';
+    pill.dataset.tag = tag;
+    pill.textContent = tag;
+    pill.setAttribute('aria-label', `Add suggested tag ${tag}`);
+    setTagTone(tag, pill);
+
+    return pill;
+}
+
 function renderCaptureTagsInput({ tagsInput, tagsTextInput, tagsList }) {
     const fragment = document.createDocumentFragment();
 
@@ -942,14 +999,93 @@ function renderCaptureTagsInput({ tagsInput, tagsTextInput, tagsList }) {
     tagsTextInput.closest('.tag-input')?.classList.toggle('has-tags', state.captureTags.length > 0);
 }
 
+function renderCaptureTagSuggestions({ suggestionsWrap, suggestionsList }) {
+    if (!suggestionsWrap || !suggestionsList) {
+        return;
+    }
+
+    const availableSuggestions = state.captureSuggestedTags.filter((tag) => !state.captureTags.includes(tag));
+
+    if (!availableSuggestions.length) {
+        suggestionsWrap.hidden = true;
+        suggestionsList.replaceChildren();
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    availableSuggestions.forEach((tag) => {
+        fragment.append(createSuggestedTagPill(tag));
+    });
+
+    suggestionsWrap.hidden = false;
+    suggestionsList.replaceChildren(fragment);
+}
+
+function resetCaptureTagSuggestions(controls) {
+    state.tagSuggestionsRequestToken += 1;
+    clearScheduledTagSuggestions();
+    state.captureSuggestedTags = [];
+    renderCaptureTagSuggestions(controls);
+}
+
+async function performTagSuggestions(content, requestToken, controls) {
+    const trimmedContent = String(content || '').trim();
+
+    if (!hasMeaningfulContentForTagSuggestions(trimmedContent) || requestToken !== state.tagSuggestionsRequestToken) {
+        return;
+    }
+
+    try {
+        const suggestedTags = await requestTagSuggestions(trimmedContent, state.captureTags);
+
+        if (requestToken !== state.tagSuggestionsRequestToken) {
+            return;
+        }
+
+        state.captureSuggestedTags = suggestedTags.filter((tag) => !state.captureTags.includes(tag));
+        renderCaptureTagSuggestions(controls);
+    } catch (error) {
+        if (requestToken !== state.tagSuggestionsRequestToken) {
+            return;
+        }
+
+        console.error('Failed to suggest capture tags.', error);
+        state.captureSuggestedTags = [];
+        renderCaptureTagSuggestions(controls);
+    }
+}
+
+function scheduleTagSuggestions(content, controls) {
+    const trimmedContent = String(content || '').trim();
+
+    state.tagSuggestionsRequestToken += 1;
+    clearScheduledTagSuggestions();
+
+    if (!hasMeaningfulContentForTagSuggestions(trimmedContent)) {
+        state.captureSuggestedTags = [];
+        renderCaptureTagSuggestions(controls);
+        return;
+    }
+
+    const requestToken = state.tagSuggestionsRequestToken;
+
+    state.tagSuggestionsDebounceTimer = window.setTimeout(() => {
+        state.tagSuggestionsDebounceTimer = null;
+        void performTagSuggestions(trimmedContent, requestToken, controls);
+    }, TAG_SUGGESTIONS_DEBOUNCE_MS);
+}
+
 function addCaptureTags(tags, controls) {
     state.captureTags = normalizeTags([...state.captureTags, ...normalizeTags(tags)]);
     renderCaptureTagsInput(controls);
+    renderCaptureTagSuggestions(controls);
 }
 
 function removeCaptureTag(tag, controls) {
     state.captureTags = state.captureTags.filter((entry) => entry !== tag);
     renderCaptureTagsInput(controls);
+    renderCaptureTagSuggestions(controls);
 }
 
 function commitCaptureTagInput(controls, options = {}) {
@@ -1253,13 +1389,22 @@ function createNoteCard(note) {
     return article;
 }
 
-function clearCaptureInputs({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList }) {
+function clearCaptureInputs({
+    contentInput,
+    urlInput,
+    tagsInput,
+    tagsTextInput,
+    tagsList,
+    suggestionsWrap,
+    suggestionsList
+}) {
     contentInput.value = '';
     urlInput.value = '';
     state.captureTags = [];
     tagsInput.value = '';
     tagsTextInput.value = '';
     renderCaptureTagsInput({ tagsInput, tagsTextInput, tagsList });
+    resetCaptureTagSuggestions({ suggestionsWrap, suggestionsList });
 }
 
 function setSaveButtonLabel(label, saveButton) {
@@ -1309,7 +1454,16 @@ async function summarizeNote(noteId) {
     }
 }
 
-async function saveNote({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList, saveButton }) {
+async function saveNote({
+    contentInput,
+    urlInput,
+    tagsInput,
+    tagsTextInput,
+    tagsList,
+    suggestionsWrap,
+    suggestionsList,
+    saveButton
+}) {
     if (state.isSavingNote) {
         return false;
     }
@@ -1397,7 +1551,15 @@ async function saveNote({ contentInput, urlInput, tagsInput, tagsTextInput, tags
             clearNoteUiState(savedNote.id);
         }
 
-        clearCaptureInputs({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList });
+        clearCaptureInputs({
+            contentInput,
+            urlInput,
+            tagsInput,
+            tagsTextInput,
+            tagsList,
+            suggestionsWrap,
+            suggestionsList
+        });
         contentInput.focus();
         setFeedback(successMessage);
 
@@ -1508,6 +1670,10 @@ function renderApp() {
                                         <div id="capture-tags-list" class="capture-tags-list" aria-live="polite"></div>
                                         <input id="note-tags-input" type="text" placeholder="Type a tag and press comma or Enter">
                                     </div>
+                                    <div id="capture-tag-suggestions" class="capture-suggestions" hidden>
+                                        <span class="capture-suggestions-label">Suggested:</span>
+                                        <div id="capture-tag-suggestions-list" class="capture-tag-suggestions-list" aria-live="polite"></div>
+                                    </div>
                                     <input id="note-tags" type="hidden" value="">
                                 </label>
                             </div>
@@ -1558,17 +1724,26 @@ function renderApp() {
     const tagsTextInput = document.querySelector('#note-tags-input');
     const tagsList = document.querySelector('#capture-tags-list');
     const tagsControl = document.querySelector('#note-tags-control');
+    const tagSuggestions = document.querySelector('#capture-tag-suggestions');
+    const tagSuggestionsList = document.querySelector('#capture-tag-suggestions-list');
     const autoSummarizeInput = document.querySelector('#note-auto-summarize');
     const searchInput = document.querySelector('#notes-search');
     const tagFilters = document.querySelector('#notes-tag-filters');
     const saveButton = document.querySelector('#save-note');
     const notesList = document.querySelector('#notes-list');
     const themeToggle = document.querySelector('#theme-toggle');
-    const captureTagControls = { tagsInput, tagsTextInput, tagsList };
+    const captureTagControls = {
+        tagsInput,
+        tagsTextInput,
+        tagsList,
+        suggestionsWrap: tagSuggestions,
+        suggestionsList: tagSuggestionsList
+    };
 
     autoSummarizeInput.checked = state.captureAutoSummarize;
     searchInput.value = state.query;
     renderCaptureTagsInput(captureTagControls);
+    renderCaptureTagSuggestions(captureTagControls);
     applyThemePreference();
 
     themeToggle.addEventListener('click', () => {
@@ -1577,7 +1752,16 @@ function renderApp() {
 
     saveButton.addEventListener('click', async () => {
         try {
-            await saveNote({ contentInput, urlInput, tagsInput, tagsTextInput, tagsList, saveButton });
+            await saveNote({
+                contentInput,
+                urlInput,
+                tagsInput,
+                tagsTextInput,
+                tagsList,
+                suggestionsWrap: tagSuggestions,
+                suggestionsList: tagSuggestionsList,
+                saveButton
+            });
         } catch (error) {
             console.error('Failed to save note.', error);
             setFeedback('Could not save this note. Please try again.');
@@ -1593,6 +1777,10 @@ function renderApp() {
     searchInput.addEventListener('input', (event) => {
         state.query = event.target.value;
         scheduleSearch(state.query);
+    });
+
+    contentInput.addEventListener('input', (event) => {
+        scheduleTagSuggestions(event.target.value, captureTagControls);
     });
 
     tagsControl.addEventListener('click', (event) => {
@@ -1637,6 +1825,19 @@ function renderApp() {
         }
 
         removeCaptureTag(target.dataset.tag, captureTagControls);
+        tagsTextInput.focus();
+    });
+
+    tagSuggestionsList.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest('.suggested-tag-pill')
+            : null;
+
+        if (!(target instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        addCaptureTags([target.dataset.tag], captureTagControls);
         tagsTextInput.focus();
     });
 
