@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { fetchLinkMetadata } from './lib/fetch-link.js';
 import { readJournalData } from './lib/journal.js';
+import { clusterNotesByOverlappingTags } from './public/cluster.js';
 import { createExternalNote } from './lib/save-external.js';
 import { searchNotes } from './lib/search.js';
 import { suggestTags } from './lib/suggest-tags.js';
@@ -171,6 +172,40 @@ async function handleSearch(req, res) {
     }
 }
 
+async function handleCluster(req, res) {
+    setCorsHeaders(res);
+
+    if (req.method === 'OPTIONS') {
+        return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method !== 'POST') {
+        res.setHeader('Allow', 'POST, OPTIONS');
+        return sendJson(res, 405, { error: 'Method not allowed. Use POST.' });
+    }
+
+    const body = await readJsonBody(req);
+
+    if (!body) {
+        return sendJson(res, 400, { error: 'Invalid JSON body.' });
+    }
+
+    const notes = Array.isArray(body.notes) ? body.notes : null;
+
+    if (!notes) {
+        return sendJson(res, 400, { error: 'Notes must be an array.' });
+    }
+
+    try {
+        return sendJson(res, 200, clusterNotesByOverlappingTags(notes));
+    } catch (error) {
+        console.error('Failed to cluster notes.', error);
+        return sendJson(res, 500, {
+            error: error instanceof Error ? error.message : 'Failed to cluster notes.'
+        });
+    }
+}
+
 async function handleSuggestTags(req, res) {
     setCorsHeaders(res);
 
@@ -312,6 +347,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === '/api/search') {
         await handleSearch(req, res);
+        return;
+    }
+
+    if (url.pathname === '/api/cluster') {
+        await handleCluster(req, res);
         return;
     }
 

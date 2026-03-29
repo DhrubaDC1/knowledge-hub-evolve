@@ -1,3 +1,5 @@
+import { clusterNotesByOverlappingTags } from './cluster.js';
+
 const STORAGE_KEY = 'kh-notes';
 const THEME_STORAGE_KEY = 'kh-theme';
 const THEME_COLORS = {
@@ -18,6 +20,7 @@ const GRAPH_TAG_WEIGHT_SHARE = 0.55;
 const GRAPH_SIMILARITY_WEIGHT_SHARE = 0.45;
 const GRAPH_MIN_SCALE = 0.55;
 const GRAPH_MAX_SCALE = 2.4;
+const CLUSTER_COLOR_HUES = [168, 24, 218, 338, 84, 196, 12, 266, 48, 132];
 const TIMELINE_DAY_GROUP_WINDOW_DAYS = 7;
 const UNTAGGED_FILTER_VALUE = '__untagged__';
 const UNTAGGED_FILTER_LABEL = 'untagged';
@@ -77,6 +80,11 @@ const state = {
     searchStatusMessage: '',
     resolvedSearchQuery: '',
     activeLibraryView: 'list',
+    clusterData: createEmptyClusterData(),
+    clusterFingerprint: '',
+    clusterResolvedFingerprint: '',
+    clusterRequestFingerprint: '',
+    clusterRequestToken: 0,
     graphData: {
         nodes: [],
         edges: []
@@ -237,6 +245,14 @@ class KnowledgeHubStorage {
 }
 
 const Storage = new KnowledgeHubStorage();
+
+function createEmptyClusterData() {
+    return {
+        clusterCount: 0,
+        clusters: [],
+        noteClusterMap: {}
+    };
+}
 
 function readThemePreference() {
     try {
@@ -616,6 +632,79 @@ function getTagHue(tag) {
 
 function setTagTone(tag, element) {
     element.style.setProperty('--tag-hue', String(getTagHue(tag)));
+}
+
+function createClusterFingerprint(notes = []) {
+    return (Array.isArray(notes) ? notes : [])
+        .map((note) => {
+            const noteId = note?.id ? String(note.id) : '';
+            const tags = Array.isArray(note?.tags)
+                ? [...note.tags].sort((left, right) => left.localeCompare(right)).join('|')
+                : '';
+
+            return noteId ? `${noteId}:${tags}` : '';
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right))
+        .join('||');
+}
+
+function normalizeClusterData(payload, notes = []) {
+    if (!payload || typeof payload !== 'object') {
+        return clusterNotesByOverlappingTags(notes);
+    }
+
+    const clusters = Array.isArray(payload.clusters) ? payload.clusters : null;
+    const noteClusterMap = payload.noteClusterMap && typeof payload.noteClusterMap === 'object'
+        ? payload.noteClusterMap
+        : null;
+
+    if (!clusters || !noteClusterMap) {
+        return clusterNotesByOverlappingTags(notes);
+    }
+
+    return {
+        clusterCount: Number.isFinite(payload.clusterCount) ? Number(payload.clusterCount) : clusters.length,
+        clusters,
+        noteClusterMap
+    };
+}
+
+function getClusterById(clusterId, clusterData = state.clusterData) {
+    if (!clusterId) {
+        return null;
+    }
+
+    return clusterData.clusters.find((cluster) => cluster.id === clusterId) || null;
+}
+
+function getClusterForNote(noteId, clusterData = state.clusterData) {
+    const clusterId = clusterData.noteClusterMap[String(noteId || '')];
+
+    return getClusterById(clusterId, clusterData);
+}
+
+function getClusterColor(cluster) {
+    const colorIndex = Number(cluster?.colorIndex) || 0;
+    const hue = CLUSTER_COLOR_HUES[colorIndex % CLUSTER_COLOR_HUES.length];
+    const saturation = cluster?.label === UNTAGGED_FILTER_LABEL ? '10%' : '62%';
+    const lightness = state.activeTheme === 'dark' ? '68%' : '45%';
+
+    return `hsl(${hue} ${saturation} ${lightness})`;
+}
+
+function setClusterTone(cluster, element) {
+    element.style.setProperty('--cluster-color', getClusterColor(cluster));
+}
+
+function formatClusterLabel(cluster) {
+    const label = String(cluster?.label || UNTAGGED_FILTER_LABEL).trim();
+
+    if (!label) {
+        return 'Untagged';
+    }
+
+    return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
 }
 
 function collectKnowledgeMetrics(notes) {
@@ -1636,14 +1725,15 @@ class GraphCanvasController {
     }
 
     getNodeColor(note = {}) {
-        const baseTag = Array.isArray(note.tags) && note.tags.length
-            ? note.tags[0]
-            : UNTAGGED_FILTER_LABEL;
-        const hue = getTagHue(baseTag);
-        const lightness = state.activeTheme === 'dark' ? '69%' : '44%';
-        const saturation = baseTag === UNTAGGED_FILTER_LABEL ? '10%' : '58%';
+        const cluster = getClusterForNote(note.id);
 
-        return `hsl(${hue} ${saturation} ${lightness})`;
+        if (cluster) {
+            return getClusterColor(cluster);
+        }
+
+        const lightness = state.activeTheme === 'dark' ? '69%' : '44%';
+
+        return `hsl(0 0% ${lightness})`;
     }
 
     createAlphaColor(color, alpha) {
@@ -1911,6 +2001,34 @@ async function requestSearchResults(query, notes) {
             })
             .filter(Boolean)
         : [];
+}
+
+async function requestClusterResults(notes) {
+    const response = await fetch('/api/cluster', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ notes })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Cluster API not found. Run the app with `npm run dev` so Vercel serves `/api/cluster`.');
+        }
+
+        throw new Error(payload?.error || 'Could not cluster notes right now.');
+    }
+
+    return normalizeClusterData(payload, notes);
 }
 
 function createRelatedResults(results, currentNoteId) {
@@ -2381,6 +2499,51 @@ async function requestJournal() {
     return payload && typeof payload === 'object' ? payload : null;
 }
 
+async function refreshClusterData(notes, fingerprint, requestToken) {
+    try {
+        const clusterData = await requestClusterResults(notes);
+
+        if (requestToken !== state.clusterRequestToken || fingerprint !== state.clusterFingerprint) {
+            return;
+        }
+
+        state.clusterData = clusterData;
+        state.clusterResolvedFingerprint = fingerprint;
+        state.clusterRequestFingerprint = '';
+        renderNotesList();
+    } catch (error) {
+        if (requestToken !== state.clusterRequestToken || fingerprint !== state.clusterFingerprint) {
+            return;
+        }
+
+        console.error('Failed to refresh clusters via API.', error);
+        state.clusterResolvedFingerprint = fingerprint;
+        state.clusterRequestFingerprint = '';
+    }
+}
+
+function syncClusterData(notes) {
+    const nextNotes = Array.isArray(notes) ? notes : [];
+    const fingerprint = createClusterFingerprint(nextNotes);
+
+    state.clusterFingerprint = fingerprint;
+    state.clusterData = clusterNotesByOverlappingTags(nextNotes);
+
+    if (!fingerprint) {
+        state.clusterResolvedFingerprint = '';
+        state.clusterRequestFingerprint = '';
+        return;
+    }
+
+    if (state.clusterResolvedFingerprint === fingerprint || state.clusterRequestFingerprint === fingerprint) {
+        return;
+    }
+
+    state.clusterRequestToken += 1;
+    state.clusterRequestFingerprint = fingerprint;
+    void refreshClusterData(nextNotes, fingerprint, state.clusterRequestToken);
+}
+
 function setFeedback(message) {
     state.feedback = message;
     const feedbackElement = document.querySelector('#capture-feedback');
@@ -2618,6 +2781,7 @@ function renderGraphView() {
     const graphEmpty = document.querySelector('#graph-empty-state');
     const graphHint = document.querySelector('#graph-hint');
     const graphCount = document.querySelector('#graph-count');
+    const graphLegend = document.querySelector('#graph-legend');
     const hasNotes = state.graphData.nodes.length > 0;
 
     graphCanvasController.mount(canvas);
@@ -2635,15 +2799,53 @@ function renderGraphView() {
 
     if (graphHint) {
         graphHint.textContent = hasNotes
-            ? 'Drag notes to rearrange. Scroll to zoom. Drag the background to pan.'
+            ? 'Drag notes to rearrange. Scroll to zoom. Drag the background to pan. Colors show tag clusters.'
             : 'The graph will appear once there are notes to connect.';
     }
 
     if (graphCount) {
         const edgeCount = state.graphData.edges.length;
+        const clusterCount = state.clusterData.clusters.length;
         graphCount.textContent = hasNotes
-            ? `${formatCountLabel(state.graphData.nodes.length, 'node')} • ${formatCountLabel(edgeCount, 'connection')}`
+            ? `${formatCountLabel(state.graphData.nodes.length, 'node')} • ${formatCountLabel(edgeCount, 'connection')} • ${formatCountLabel(clusterCount, 'cluster')}`
             : '0 nodes';
+    }
+
+    if (graphLegend) {
+        graphLegend.hidden = !hasNotes || !state.clusterData.clusters.length;
+
+        if (hasNotes && state.clusterData.clusters.length) {
+            const fragment = document.createDocumentFragment();
+
+            state.clusterData.clusters.forEach((cluster) => {
+                const item = document.createElement('article');
+                const swatch = document.createElement('span');
+                const body = document.createElement('div');
+                const label = document.createElement('p');
+                const meta = document.createElement('p');
+
+                item.className = 'graph-legend-item';
+                swatch.className = 'graph-legend-swatch';
+                setClusterTone(cluster, swatch);
+
+                body.className = 'graph-legend-body';
+                label.className = 'graph-legend-label';
+                label.textContent = formatClusterLabel(cluster);
+
+                meta.className = 'graph-legend-meta';
+                meta.textContent = cluster.topTags.length
+                    ? `${formatCountLabel(cluster.size, 'note')} • ${cluster.topTags.join(', ')}`
+                    : `${formatCountLabel(cluster.size, 'note')} • no tags`;
+
+                body.append(label, meta);
+                item.append(swatch, body);
+                fragment.append(item);
+            });
+
+            graphLegend.replaceChildren(fragment);
+        } else {
+            graphLegend.replaceChildren();
+        }
     }
 
     renderGraphSelection();
@@ -3183,6 +3385,102 @@ function createEmptyState(allNotes) {
     emptyState.append(title, copy);
 
     return emptyState;
+}
+
+function createClusterSection(cluster, notes, startIndex = 0) {
+    const section = document.createElement('section');
+    const header = document.createElement('div');
+    const heading = document.createElement('div');
+    const kicker = document.createElement('p');
+    const titleRow = document.createElement('div');
+    const swatch = document.createElement('span');
+    const title = document.createElement('h3');
+    const meta = document.createElement('p');
+    const count = document.createElement('span');
+    const notesGrid = document.createElement('div');
+
+    section.className = 'notes-cluster';
+    header.className = 'notes-cluster-header';
+    heading.className = 'notes-cluster-heading';
+    setClusterTone(cluster, header);
+
+    kicker.className = 'notes-cluster-kicker';
+    kicker.textContent = `Cluster ${Number(cluster?.colorIndex || 0) + 1}`;
+
+    titleRow.className = 'notes-cluster-title-row';
+    swatch.className = 'notes-cluster-swatch';
+    setClusterTone(cluster, swatch);
+
+    title.className = 'notes-cluster-title';
+    title.textContent = formatClusterLabel(cluster);
+    titleRow.append(swatch, title);
+
+    meta.className = 'notes-cluster-meta';
+    meta.textContent = cluster.topTags.length
+        ? `Connected by ${cluster.topTags.join(', ')}.`
+        : 'No tags yet, so these notes currently stand alone.';
+
+    heading.append(kicker, titleRow, meta);
+
+    count.className = 'notes-cluster-count';
+    count.textContent = formatCountLabel(notes.length, 'note');
+
+    notesGrid.className = 'notes-cluster-notes';
+    notes.forEach((note, noteIndex) => {
+        notesGrid.append(createNoteCard(note, startIndex + noteIndex));
+    });
+
+    header.append(heading, count);
+    section.append(header, notesGrid);
+
+    return section;
+}
+
+function renderClusteredNotesList(notesList, notes) {
+    const notesByClusterId = new Map();
+    const orderedClusters = [];
+    let globalIndex = 0;
+
+    notes.forEach((note) => {
+        const cluster = getClusterForNote(note.id);
+        const clusterId = cluster?.id || 'cluster-unassigned';
+
+        if (!notesByClusterId.has(clusterId)) {
+            notesByClusterId.set(clusterId, []);
+        }
+
+        notesByClusterId.get(clusterId).push(note);
+    });
+
+    state.clusterData.clusters.forEach((cluster) => {
+        if (notesByClusterId.has(cluster.id)) {
+            orderedClusters.push({
+                cluster,
+                notes: notesByClusterId.get(cluster.id) || []
+            });
+        }
+    });
+
+    if (!orderedClusters.length) {
+        orderedClusters.push({
+            cluster: {
+                id: 'cluster-1',
+                colorIndex: 0,
+                label: UNTAGGED_FILTER_LABEL,
+                topTags: []
+            },
+            notes
+        });
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    orderedClusters.forEach(({ cluster, notes: clusterNotes }) => {
+        fragment.append(createClusterSection(cluster, clusterNotes, globalIndex));
+        globalIndex += clusterNotes.length;
+    });
+
+    notesList.replaceChildren(fragment);
 }
 
 function createJournalStat(label, value) {
@@ -4168,12 +4466,14 @@ function renderNotesList() {
     const allNotes = Storage.getAll();
     renderTagFilters(allNotes);
     state.notes = getDisplayedNotes(allNotes);
+    syncClusterData(state.notes);
     syncGraphData(state.notes);
     syncGraphSelection(state.notes);
 
     syncOverview(allNotes);
     syncNotesPresentation(allNotes);
     notesList.classList.toggle('has-results', state.notes.length > 0);
+    notesList.classList.toggle('is-clustered', state.notes.length > 0);
 
     if (!state.notes.length) {
         notesList.replaceChildren(createEmptyState(allNotes));
@@ -4182,13 +4482,7 @@ function renderNotesList() {
         return;
     }
 
-    const fragment = document.createDocumentFragment();
-
-    state.notes.forEach((note, index) => {
-        fragment.append(createNoteCard(note, index));
-    });
-
-    notesList.replaceChildren(fragment);
+    renderClusteredNotesList(notesList, state.notes);
     syncExpandedRelatedNotes();
     ensureVisibleInsights(state.notes);
     renderGraphView();
@@ -4361,6 +4655,8 @@ function renderHomePage() {
                             <p id="graph-hint" class="graph-hint">Drag notes to rearrange. Scroll to zoom. Drag the background to pan.</p>
                             <span id="graph-count" class="graph-count">0 nodes</span>
                         </div>
+
+                        <div id="graph-legend" class="graph-legend" aria-label="Cluster legend" hidden></div>
 
                         <div class="graph-stage">
                             <div class="graph-canvas-shell">
