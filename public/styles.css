@@ -454,6 +454,14 @@ a {
     gap: var(--space-3);
 }
 
+.field-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
 .field > span {
     font-size: 0.92rem;
     font-weight: 700;
@@ -484,6 +492,77 @@ a {
 .field textarea {
     min-height: 190px;
     resize: vertical;
+}
+
+.mic-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    min-height: 2.5rem;
+    padding: 0.55rem 0.9rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
+    color: var(--text);
+    font-size: 0.84rem;
+    font-weight: 800;
+    box-shadow: var(--shadow-sm);
+}
+
+.mic-button:hover,
+.mic-button:focus-visible {
+    outline: none;
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 24%, var(--border-strong));
+    box-shadow:
+        0 0 0 4px var(--focus-ring),
+        var(--shadow-sm);
+}
+
+.mic-button.is-recording {
+    border-color: color-mix(in srgb, var(--danger) 68%, var(--border-strong));
+    background: color-mix(in srgb, var(--danger) 14%, var(--surface-strong));
+    color: color-mix(in srgb, var(--danger) 78%, var(--text));
+}
+
+.mic-button.is-unsupported {
+    opacity: 0.58;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.mic-indicator {
+    width: 0.72rem;
+    height: 0.72rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-muted) 70%, transparent);
+    box-shadow: 0 0 0 0 rgba(185, 28, 28, 0);
+    transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.mic-button.is-recording .mic-indicator {
+    background: var(--danger);
+    animation: mic-pulse 1.2s ease-out infinite;
+}
+
+.mic-meta {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.mic-status,
+.mic-preview {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+}
+
+.mic-preview {
+    padding: 0.7rem 0.85rem;
+    border: 1px dashed color-mix(in srgb, var(--accent) 18%, var(--border));
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--surface-muted) 96%, transparent);
+    color: var(--text);
 }
 
 .field input::placeholder,
@@ -2521,6 +2600,14 @@ a:active {
         font-size: 0.9rem;
     }
 
+    .field-label-row {
+        align-items: stretch;
+    }
+
+    .mic-button {
+        width: 100%;
+    }
+
     .graph-panel-header {
         align-items: flex-start;
     }
@@ -2568,5 +2655,22 @@ a:active {
     .notes-count-indicator,
     .primary-button {
         min-height: 3rem;
+    }
+}
+
+@keyframes mic-pulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(185, 28, 28, 0.3);
+    }
+
+    70% {
+        transform: scale(1.04);
+        box-shadow: 0 0 0 12px rgba(185, 28, 28, 0);
+    }
+
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(185, 28, 28, 0);
     }
 }

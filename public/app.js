@@ -9,6 +9,7 @@ const THEME_COLORS = {
 const SEARCH_DEBOUNCE_MS = 300;
 const TAG_SUGGESTIONS_DEBOUNCE_MS = 1000;
 const TAG_SUGGESTIONS_MIN_CONTENT_LENGTH = 20;
+const SPEECH_RECOGNITION_MAX_DURATION_MS = 5 * 60 * 1000;
 const TAG_FILTER_TRANSITION_MS = 320;
 const SUMMARY_REVEAL_RESET_MS = 700;
 const RELATED_NOTES_MAX_RESULTS = 3;
@@ -60,6 +61,7 @@ const GRAPH_STOP_WORDS = new Set([
 const app = document.querySelector('#app');
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
 const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+const SpeechRecognitionConstructor = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 const state = {
     notes: [],
@@ -101,6 +103,20 @@ const state = {
     journalError: '',
     themePreference: readThemePreference(),
     activeTheme: 'light'
+};
+
+const speechState = {
+    recognition: null,
+    isSupported: Boolean(SpeechRecognitionConstructor),
+    isRecording: false,
+    requestedStop: false,
+    startedAt: 0,
+    autoStopTimer: 0,
+    finalTranscript: '',
+    interimTranscript: '',
+    statusMessage: getSpeechDefaultMessage(),
+    endMessage: '',
+    stopResolvers: []
 };
 
 class KnowledgeHubStorage {
@@ -280,6 +296,341 @@ function updateThemeMetaColor(theme) {
     if (themeColorElement) {
         themeColorElement.setAttribute('content', THEME_COLORS[theme]);
     }
+}
+
+function getSpeechDefaultMessage() {
+    if (!SpeechRecognitionConstructor) {
+        return window.isSecureContext
+            ? 'Voice capture requires a browser with Web Speech API support.'
+            : 'Voice capture needs HTTPS or localhost plus Web Speech API support.';
+    }
+
+    return 'Tap the mic to dictate up to 5 minutes.';
+}
+
+function clearSpeechAutoStopTimer() {
+    if (!speechState.autoStopTimer) {
+        return;
+    }
+
+    window.clearTimeout(speechState.autoStopTimer);
+    speechState.autoStopTimer = 0;
+}
+
+function scheduleSpeechAutoStopTimer(durationMs) {
+    clearSpeechAutoStopTimer();
+
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        return;
+    }
+
+    speechState.autoStopTimer = window.setTimeout(() => {
+        void stopSpeechCapture('max-duration');
+    }, durationMs);
+}
+
+function queueSpeechStopResolver() {
+    return new Promise((resolve) => {
+        speechState.stopResolvers.push(resolve);
+    });
+}
+
+function flushSpeechStopResolvers() {
+    const resolvers = [...speechState.stopResolvers];
+
+    speechState.stopResolvers = [];
+    resolvers.forEach((resolve) => resolve());
+}
+
+function getSpeechCombinedTranscript() {
+    return [speechState.finalTranscript, speechState.interimTranscript]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function getSpeechControls() {
+    return {
+        contentInput: document.querySelector('#note-content'),
+        micButton: document.querySelector('#note-mic-button'),
+        micLabel: document.querySelector('#note-mic-label'),
+        micStatus: document.querySelector('#capture-mic-status'),
+        micPreview: document.querySelector('#capture-mic-preview')
+    };
+}
+
+function updateSpeechUi() {
+    const { micButton, micLabel, micStatus, micPreview } = getSpeechControls();
+    const previewText = getSpeechCombinedTranscript();
+
+    if (micButton) {
+        micButton.disabled = !speechState.isSupported;
+        micButton.classList.toggle('is-recording', speechState.isRecording);
+        micButton.classList.toggle('is-unsupported', !speechState.isSupported);
+        micButton.setAttribute('aria-pressed', String(speechState.isRecording));
+        micButton.setAttribute('aria-label', speechState.isRecording ? 'Stop voice capture' : 'Start voice capture');
+        micButton.title = speechState.isSupported
+            ? (speechState.isRecording ? 'Stop voice capture' : 'Start voice capture')
+            : getSpeechDefaultMessage();
+
+        if (micLabel) {
+            micLabel.textContent = speechState.isRecording ? 'Stop recording' : 'Record note';
+        }
+    }
+
+    if (micStatus) {
+        micStatus.textContent = speechState.statusMessage;
+    }
+
+    if (micPreview) {
+        micPreview.hidden = !previewText;
+        micPreview.textContent = previewText;
+    }
+}
+
+function resetSpeechSession() {
+    speechState.requestedStop = false;
+    speechState.startedAt = 0;
+    speechState.finalTranscript = '';
+    speechState.interimTranscript = '';
+    speechState.endMessage = '';
+    clearSpeechAutoStopTimer();
+}
+
+function mergeTranscriptIntoContent(existingContent, transcript) {
+    const normalizedExisting = String(existingContent || '').trimEnd();
+    const normalizedTranscript = String(transcript || '').trim();
+
+    if (!normalizedTranscript) {
+        return normalizedExisting;
+    }
+
+    if (!normalizedExisting) {
+        return normalizedTranscript;
+    }
+
+    return `${normalizedExisting}\n${normalizedTranscript}`;
+}
+
+function applySpeechTranscriptToTextarea() {
+    const { contentInput } = getSpeechControls();
+    const transcript = getSpeechCombinedTranscript();
+
+    if (!(contentInput instanceof HTMLTextAreaElement) || !transcript) {
+        return false;
+    }
+
+    contentInput.value = mergeTranscriptIntoContent(contentInput.value, transcript);
+    contentInput.focus();
+    contentInput.setSelectionRange(contentInput.value.length, contentInput.value.length);
+    contentInput.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+}
+
+function getSpeechErrorMessage(errorCode) {
+    switch (errorCode) {
+        case 'not-allowed':
+        case 'service-not-allowed':
+            return 'Microphone access was blocked. Allow mic permission and try again.';
+        case 'audio-capture':
+            return 'No microphone was found. Check your audio input and try again.';
+        case 'network':
+            return 'Voice capture needs a stable network connection.';
+        case 'no-speech':
+            return 'No speech detected. Try again.';
+        case 'aborted':
+            return 'Voice capture stopped.';
+        default:
+            return 'Voice capture stopped unexpectedly. Try again.';
+    }
+}
+
+function finalizeSpeechCapture() {
+    const appendedTranscript = applySpeechTranscriptToTextarea();
+    let statusMessage = speechState.endMessage;
+    const fallbackMessage = appendedTranscript
+        ? 'Transcription added to your note.'
+        : 'No speech detected. Try again.';
+
+    if (!appendedTranscript && speechState.endMessage === 'Stopped after 5 minutes. Transcription added to your note.') {
+        statusMessage = 'Stopped after 5 minutes. No speech was detected.';
+    } else if (!appendedTranscript && speechState.endMessage === 'Transcription added to your note.') {
+        statusMessage = fallbackMessage;
+    }
+
+    speechState.isRecording = false;
+    speechState.statusMessage = statusMessage || fallbackMessage;
+    resetSpeechSession();
+    updateSpeechUi();
+    flushSpeechStopResolvers();
+}
+
+function ensureSpeechRecognition() {
+    if (!speechState.isSupported) {
+        return null;
+    }
+
+    if (speechState.recognition) {
+        return speechState.recognition;
+    }
+
+    const recognition = new SpeechRecognitionConstructor();
+
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.lang = document.documentElement.lang || navigator.language || 'en-US';
+
+    recognition.onstart = () => {
+        speechState.isRecording = true;
+        speechState.statusMessage = 'Listening... transcript updates in real time.';
+        updateSpeechUi();
+    };
+
+    recognition.onresult = (event) => {
+        const finalizedParts = [];
+        const interimParts = [];
+
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+            const result = event.results[index];
+            const transcript = result?.[0]?.transcript?.trim();
+
+            if (!transcript) {
+                continue;
+            }
+
+            if (result.isFinal) {
+                finalizedParts.push(transcript);
+            } else {
+                interimParts.push(transcript);
+            }
+        }
+
+        if (finalizedParts.length) {
+            speechState.finalTranscript = [speechState.finalTranscript, finalizedParts.join(' ')]
+                .filter(Boolean)
+                .join(' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        speechState.interimTranscript = interimParts.join(' ').replace(/\s+/g, ' ').trim();
+        speechState.statusMessage = 'Listening... transcript updates in real time.';
+        updateSpeechUi();
+    };
+
+    recognition.onerror = (event) => {
+        speechState.requestedStop = true;
+        speechState.endMessage = getSpeechErrorMessage(event.error);
+    };
+
+    recognition.onend = () => {
+        clearSpeechAutoStopTimer();
+
+        const elapsedMs = Date.now() - speechState.startedAt;
+        const remainingMs = SPEECH_RECOGNITION_MAX_DURATION_MS - elapsedMs;
+        const isWithinTimeLimit = remainingMs > 0;
+
+        if (!speechState.requestedStop && isWithinTimeLimit) {
+            try {
+                scheduleSpeechAutoStopTimer(remainingMs);
+                recognition.start();
+                return;
+            } catch (error) {
+                console.error('Failed to restart speech recognition.', error);
+                speechState.endMessage = 'Voice capture stopped unexpectedly. Try again.';
+            }
+        }
+
+        finalizeSpeechCapture();
+    };
+
+    speechState.recognition = recognition;
+    return recognition;
+}
+
+async function stopSpeechCapture(reason = 'manual') {
+    const recognition = speechState.recognition;
+
+    if (!speechState.isRecording || !recognition) {
+        return false;
+    }
+
+    speechState.requestedStop = true;
+    clearSpeechAutoStopTimer();
+
+    if (reason === 'max-duration') {
+        speechState.endMessage = 'Stopped after 5 minutes. Transcription added to your note.';
+    } else if (reason === 'manual' || reason === 'save') {
+        speechState.endMessage = 'Transcription added to your note.';
+    }
+
+    const stopped = queueSpeechStopResolver();
+
+    try {
+        recognition.stop();
+    } catch (error) {
+        console.error('Failed to stop speech recognition cleanly.', error);
+        speechState.endMessage = 'Voice capture stopped unexpectedly. Try again.';
+        finalizeSpeechCapture();
+    }
+
+    await stopped;
+    return true;
+}
+
+function startSpeechCapture() {
+    if (!speechState.isSupported) {
+        speechState.statusMessage = getSpeechDefaultMessage();
+        updateSpeechUi();
+        return false;
+    }
+
+    if (state.isSavingNote) {
+        speechState.statusMessage = 'Finish saving before starting voice capture.';
+        updateSpeechUi();
+        return false;
+    }
+
+    const recognition = ensureSpeechRecognition();
+
+    if (!recognition) {
+        speechState.statusMessage = getSpeechDefaultMessage();
+        updateSpeechUi();
+        return false;
+    }
+
+    speechState.requestedStop = false;
+    speechState.startedAt = Date.now();
+    speechState.finalTranscript = '';
+    speechState.interimTranscript = '';
+    speechState.endMessage = '';
+    speechState.statusMessage = 'Starting microphone...';
+    scheduleSpeechAutoStopTimer(SPEECH_RECOGNITION_MAX_DURATION_MS);
+    updateSpeechUi();
+
+    try {
+        recognition.start();
+        return true;
+    } catch (error) {
+        console.error('Failed to start speech recognition.', error);
+        clearSpeechAutoStopTimer();
+        speechState.statusMessage = 'Voice capture could not start. Try again.';
+        resetSpeechSession();
+        updateSpeechUi();
+        return false;
+    }
+}
+
+async function toggleSpeechCapture() {
+    if (speechState.isRecording) {
+        await stopSpeechCapture('manual');
+        return;
+    }
+
+    startSpeechCapture();
 }
 
 function updateThemeToggle() {
@@ -4346,6 +4697,10 @@ async function saveNote({
     suggestionsList,
     saveButton
 }) {
+    if (speechState.isRecording) {
+        await stopSpeechCapture('save');
+    }
+
     if (state.isSavingNote) {
         return false;
     }
@@ -4582,8 +4937,24 @@ function renderHomePage() {
 
                         <div class="capture-grid">
                             <label class="field field-note">
-                                <span>Note</span>
+                                <span class="field-label-row">
+                                    <span>Note</span>
+                                    <button
+                                        id="note-mic-button"
+                                        class="mic-button"
+                                        type="button"
+                                        aria-pressed="false"
+                                        aria-describedby="capture-mic-status"
+                                    >
+                                        <span class="mic-indicator" aria-hidden="true"></span>
+                                        <span id="note-mic-label">Record note</span>
+                                    </button>
+                                </span>
                                 <textarea id="note-content" rows="6" placeholder="What did you just learn?"></textarea>
+                                <div class="mic-meta">
+                                    <p id="capture-mic-status" class="mic-status" aria-live="polite">Tap the mic to dictate up to 5 minutes.</p>
+                                    <p id="capture-mic-preview" class="mic-preview" hidden></p>
+                                </div>
                             </label>
 
                             <div class="field-row">
@@ -4685,6 +5056,7 @@ function renderHomePage() {
     `;
 
     const contentInput = document.querySelector('#note-content');
+    const micButton = document.querySelector('#note-mic-button');
     const urlInput = document.querySelector('#note-url');
     const tagsInput = document.querySelector('#note-tags');
     const tagsTextInput = document.querySelector('#note-tags-input');
@@ -4713,9 +5085,15 @@ function renderHomePage() {
     renderCaptureTagsInput(captureTagControls);
     renderCaptureTagSuggestions(captureTagControls);
     applyThemePreference();
+    speechState.statusMessage = getSpeechDefaultMessage();
+    updateSpeechUi();
 
     themeToggle.addEventListener('click', () => {
         toggleThemePreference();
+    });
+
+    micButton?.addEventListener('click', async () => {
+        await toggleSpeechCapture();
     });
 
     document.querySelectorAll('.view-tab').forEach((button) => {
@@ -4989,3 +5367,18 @@ themeMediaQuery.addEventListener('change', () => {
 });
 
 renderApp();
+
+window.addEventListener('pagehide', () => {
+    clearSpeechAutoStopTimer();
+
+    if (!speechState.recognition || !speechState.isRecording) {
+        return;
+    }
+
+    try {
+        speechState.requestedStop = true;
+        speechState.recognition.abort();
+    } catch (error) {
+        console.error('Failed to abort speech recognition on page hide.', error);
+    }
+});
