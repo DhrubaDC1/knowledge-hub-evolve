@@ -1,0 +1,12 @@
+{
+  "name": "knowledge-hub",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'Static build — no build step required'"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  }
+}
