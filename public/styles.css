@@ -999,6 +999,7 @@ a {
     justify-content: flex-start;
 }
 
+.note-expand,
 .note-summarize,
 .note-delete {
     display: inline-flex;
@@ -1017,6 +1018,18 @@ a {
         background-color 160ms ease,
         border-color 160ms ease,
         transform 160ms ease;
+}
+
+.note-expand {
+    color: var(--text);
+}
+
+.note-expand:hover,
+.note-expand:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 24%, var(--border-strong));
+    background: var(--surface-strong);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .note-summarize {
@@ -1139,6 +1152,78 @@ a {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+}
+
+.note-related {
+    display: grid;
+    gap: var(--space-4);
+    padding-top: var(--space-2);
+    border-top: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+}
+
+.note-related-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.note-related-title {
+    font-size: 0.95rem;
+    letter-spacing: -0.01em;
+}
+
+.note-related-caption {
+    color: var(--text-muted);
+    font-size: 0.84rem;
+}
+
+.note-related-caption.is-error {
+    color: var(--danger);
+}
+
+.related-notes-list {
+    display: grid;
+    gap: var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.related-note-card {
+    display: grid;
+    gap: 0.35rem;
+    justify-items: start;
+    width: 100%;
+    padding: 0.95rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--surface-muted) 90%, transparent);
+    text-align: left;
+    box-shadow: var(--shadow-sm);
+}
+
+.related-note-card:hover,
+.related-note-card:focus-visible {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--accent) 22%, var(--border-strong));
+    background: color-mix(in srgb, var(--surface-strong) 88%, var(--accent-soft));
+}
+
+.related-note-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.related-note-snippet,
+.related-note-meta {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+
+.related-note-snippet {
+    white-space: pre-wrap;
 }
 
 .note-tag {
@@ -1681,6 +1766,7 @@ a:active {
         width: 100%;
     }
 
+    .note-expand,
     .note-summarize,
     .note-delete {
         flex: 1 1 10rem;
@@ -1706,6 +1792,7 @@ a:active {
         align-items: stretch;
     }
 
+    .note-expand,
     .note-summarize,
     .note-delete {
         width: 100%;

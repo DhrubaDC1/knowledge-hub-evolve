@@ -9,6 +9,8 @@ const TAG_SUGGESTIONS_DEBOUNCE_MS = 1000;
 const TAG_SUGGESTIONS_MIN_CONTENT_LENGTH = 20;
 const TAG_FILTER_TRANSITION_MS = 320;
 const SUMMARY_REVEAL_RESET_MS = 700;
+const RELATED_NOTES_MAX_RESULTS = 3;
+const RELATED_QUERY_MAX_LENGTH = 2400;
 const UNTAGGED_FILTER_VALUE = '__untagged__';
 const UNTAGGED_FILTER_LABEL = 'untagged';
 const app = document.querySelector('#app');
@@ -26,6 +28,7 @@ const state = {
     isSavingNote: false,
     saveButtonLabel: 'Save',
     noteUi: {},
+    relatedNotesCache: {},
     isSearching: false,
     searchResults: [],
     searchResultScores: {},
@@ -319,6 +322,16 @@ function truncateText(value, maxLength) {
     }
 
     return `${text.slice(0, maxLength).trimEnd()}...`;
+}
+
+function limitTextLength(value, maxLength) {
+    const text = String(value || '').trim();
+
+    if (!text || text.length <= maxLength) {
+        return text;
+    }
+
+    return text.slice(0, maxLength).trimEnd();
 }
 
 function formatRelativeTime(dateValue) {
@@ -859,6 +872,55 @@ async function requestSearchResults(query, notes) {
         : [];
 }
 
+function createRelatedResults(results, currentNoteId) {
+    return (Array.isArray(results) ? results : [])
+        .filter(({ note }) => note?.id && note.id !== currentNoteId)
+        .slice(0, RELATED_NOTES_MAX_RESULTS);
+}
+
+async function requestRelatedNotes(note) {
+    const noteId = String(note?.id || '');
+    const query = createRelatedNotesQuery(note);
+    const candidateNotes = Storage.getAll().filter((entry) => entry.id !== noteId);
+
+    if (!query) {
+        return {
+            results: [],
+            source: 'empty',
+            message: 'Add more note content to see related suggestions.'
+        };
+    }
+
+    if (!candidateNotes.length) {
+        return {
+            results: [],
+            source: 'empty',
+            message: 'Save one more note to unlock related suggestions.'
+        };
+    }
+
+    try {
+        const results = await requestSearchResults(query, candidateNotes);
+
+        return {
+            results: createRelatedResults(results, noteId),
+            source: 'api',
+            message: ''
+        };
+    } catch (error) {
+        console.error('Failed to load related notes via API.', error);
+        const results = createRelatedResults(createLocalSearchResults(query, candidateNotes), noteId);
+
+        return {
+            results,
+            source: 'local',
+            message: results.length
+                ? 'Showing local matches because the search API is unavailable.'
+                : 'No related notes found. The search API is unavailable right now.'
+        };
+    }
+}
+
 function applySearchResults(query, results, source, statusMessage = '') {
     const trimmedQuery = String(query || '').trim();
 
@@ -994,8 +1056,12 @@ function getDisplayedNotes(allNotes) {
 
 function getNoteUiState(noteId) {
     return state.noteUi[noteId] || {
+        isExpanded: false,
         isSummarizing: false,
-        error: ''
+        error: '',
+        isLoadingRelated: false,
+        relatedError: '',
+        relatedRequestToken: 0
     };
 }
 
@@ -1006,8 +1072,64 @@ function setNoteUiState(noteId, nextState) {
     };
 }
 
-function clearNoteUiState(noteId) {
+function clearNoteUiState(noteId, options = {}) {
+    if (options.force) {
+        delete state.noteUi[noteId];
+        return;
+    }
+
+    const uiState = state.noteUi[noteId];
+
+    if (!uiState) {
+        return;
+    }
+
+    const nextUiState = {};
+
+    if (uiState.isExpanded) {
+        nextUiState.isExpanded = true;
+    }
+
+    if (uiState.isLoadingRelated) {
+        nextUiState.isLoadingRelated = true;
+    }
+
+    if (uiState.relatedError) {
+        nextUiState.relatedError = uiState.relatedError;
+    }
+
+    if (uiState.relatedRequestToken) {
+        nextUiState.relatedRequestToken = uiState.relatedRequestToken;
+    }
+
+    if (Object.keys(nextUiState).length) {
+        state.noteUi[noteId] = nextUiState;
+        return;
+    }
+
     delete state.noteUi[noteId];
+}
+
+function getRelatedNotesCacheEntry(noteId) {
+    return state.relatedNotesCache[noteId] || null;
+}
+
+function setRelatedNotesCacheEntry(noteId, entry) {
+    state.relatedNotesCache[noteId] = entry;
+}
+
+function invalidateRelatedNotesCache() {
+    state.relatedNotesCache = {};
+}
+
+function createRelatedNotesQuery(note = {}) {
+    const content = String(note.content || '').trim();
+    const fallbackText = [note.title, note.url]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .join('\n\n');
+
+    return limitTextLength(content || fallbackText, RELATED_QUERY_MAX_LENGTH);
 }
 
 async function requestSummary(text) {
@@ -1713,6 +1835,164 @@ function syncOverview(allNotes) {
     }
 }
 
+async function ensureRelatedNotesLoaded(noteId) {
+    const uiState = getNoteUiState(noteId);
+    const cachedEntry = getRelatedNotesCacheEntry(noteId);
+
+    if (!uiState.isExpanded || uiState.isLoadingRelated || cachedEntry) {
+        return;
+    }
+
+    const note = Storage.getById(noteId);
+
+    if (!note) {
+        return;
+    }
+
+    const requestToken = Date.now() + Math.random();
+
+    setNoteUiState(noteId, {
+        isLoadingRelated: true,
+        relatedError: '',
+        relatedRequestToken: requestToken
+    });
+    renderNotesList();
+
+    try {
+        const related = await requestRelatedNotes(note);
+        const latestUiState = getNoteUiState(noteId);
+
+        if (latestUiState.relatedRequestToken !== requestToken) {
+            return;
+        }
+
+        setRelatedNotesCacheEntry(noteId, related);
+        setNoteUiState(noteId, {
+            isLoadingRelated: false,
+            relatedError: '',
+            relatedRequestToken: 0
+        });
+    } catch (error) {
+        const latestUiState = getNoteUiState(noteId);
+
+        if (latestUiState.relatedRequestToken !== requestToken) {
+            return;
+        }
+
+        setNoteUiState(noteId, {
+            isLoadingRelated: false,
+            relatedError: error instanceof Error ? error.message : 'Could not load related notes right now.',
+            relatedRequestToken: 0
+        });
+    }
+
+    renderNotesList();
+}
+
+function syncExpandedRelatedNotes() {
+    Object.entries(state.noteUi).forEach(([noteId, uiState]) => {
+        if (uiState?.isExpanded) {
+            void ensureRelatedNotesLoaded(noteId);
+        }
+    });
+}
+
+function toggleNoteExpansion(noteId) {
+    const isExpanded = getNoteUiState(noteId).isExpanded;
+
+    setNoteUiState(noteId, {
+        isExpanded: !isExpanded,
+        relatedError: isExpanded ? '' : getNoteUiState(noteId).relatedError
+    });
+    renderNotesList();
+
+    if (!isExpanded) {
+        void ensureRelatedNotesLoaded(noteId);
+    }
+}
+
+function focusNoteCard(noteId) {
+    const escapedNoteId = window.CSS?.escape ? window.CSS.escape(noteId) : noteId;
+    const noteCard = document.querySelector(`.note-card[data-note-id="${escapedNoteId}"]`);
+
+    if (!(noteCard instanceof HTMLElement)) {
+        return;
+    }
+
+    noteCard.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest'
+    });
+
+    const toggleButton = noteCard.querySelector('.note-expand');
+
+    if (toggleButton instanceof HTMLButtonElement) {
+        toggleButton.focus({ preventScroll: true });
+    }
+}
+
+function openRelatedNote(noteId) {
+    const relatedNote = Storage.getById(noteId);
+
+    if (!relatedNote) {
+        setFeedback('That related note is no longer available.');
+        invalidateRelatedNotesCache();
+        renderNotesList();
+        return false;
+    }
+
+    const isVisible = state.notes.some((note) => note.id === noteId);
+
+    if (!isVisible) {
+        state.query = '';
+        state.activeTagFilter = '';
+        resetSearchState();
+
+        const searchInput = document.querySelector('#notes-search');
+
+        if (searchInput instanceof HTMLInputElement) {
+            searchInput.value = '';
+        }
+    }
+
+    setNoteUiState(noteId, { isExpanded: true });
+    renderNotesList();
+    void ensureRelatedNotesLoaded(noteId);
+    window.requestAnimationFrame(() => {
+        focusNoteCard(noteId);
+    });
+
+    return true;
+}
+
+function createRelatedNoteCard(note) {
+    const button = document.createElement('button');
+    const title = document.createElement('span');
+    const snippet = document.createElement('span');
+    const meta = document.createElement('span');
+    const previewText = note.content || note.url || '';
+
+    button.className = 'related-note-card';
+    button.type = 'button';
+    button.dataset.noteId = note.id;
+    button.setAttribute('aria-label', `Open related note ${note.title || 'note'}`);
+
+    title.className = 'related-note-title';
+    title.textContent = note.title || (note.type === 'link' ? 'Saved link' : 'Untitled note');
+
+    snippet.className = 'related-note-snippet';
+    snippet.textContent = previewText
+        ? truncateText(previewText, 110)
+        : 'Open this note.';
+
+    meta.className = 'related-note-meta';
+    meta.textContent = `${note.type === 'link' ? 'Link' : 'Note'} • ${formatRelativeTime(note.createdAt)}`;
+
+    button.append(title, snippet, meta);
+
+    return button;
+}
+
 function createNoteCard(note, index = 0) {
     const article = document.createElement('article');
     const topRow = document.createElement('div');
@@ -1722,6 +2002,7 @@ function createNoteCard(note, index = 0) {
     const typeLabel = document.createElement('span');
     const timeLabel = document.createElement('time');
     const actions = document.createElement('div');
+    const expandButton = document.createElement('button');
     const summarizeButton = document.createElement('button');
     const deleteButton = document.createElement('button');
     const linkPreview = document.createElement('div');
@@ -1730,6 +2011,9 @@ function createNoteCard(note, index = 0) {
     const errorText = document.createElement('p');
     const tags = document.createElement('div');
     const uiState = getNoteUiState(note.id);
+    const isExpanded = uiState.isExpanded;
+    const relatedSectionId = `note-related-${note.id}`;
+    const relatedEntry = getRelatedNotesCacheEntry(note.id);
     const canSummarize = Boolean(note.content && !note.summary);
     const isSearchResult = state.query.trim() && state.resolvedSearchQuery === state.query.trim();
     const relevanceScore = state.searchResultScores[note.id];
@@ -1777,6 +2061,15 @@ function createNoteCard(note, index = 0) {
     }
 
     actions.className = 'note-actions';
+
+    expandButton.className = 'note-expand';
+    expandButton.type = 'button';
+    expandButton.dataset.noteId = note.id;
+    expandButton.setAttribute('aria-controls', relatedSectionId);
+    expandButton.setAttribute('aria-expanded', String(isExpanded));
+    expandButton.setAttribute('aria-label', `${isExpanded ? 'Hide' : 'Show'} related notes for ${note.title || 'note'}`);
+    expandButton.textContent = isExpanded ? 'Hide related' : 'Show related';
+    actions.append(expandButton);
 
     if (canSummarize) {
         summarizeButton.className = 'note-summarize';
@@ -1887,6 +2180,50 @@ function createNoteCard(note, index = 0) {
 
     article.append(tags);
 
+    if (isExpanded) {
+        const relatedSection = document.createElement('section');
+        const relatedHeader = document.createElement('div');
+        const relatedTitle = document.createElement('h3');
+        const relatedCaption = document.createElement('p');
+
+        relatedSection.className = 'note-related';
+        relatedSection.id = relatedSectionId;
+
+        relatedHeader.className = 'note-related-header';
+        relatedTitle.className = 'note-related-title';
+        relatedTitle.textContent = 'Related';
+
+        relatedCaption.className = 'note-related-caption';
+
+        if (uiState.isLoadingRelated) {
+            relatedCaption.textContent = 'Finding related notes...';
+        } else if (uiState.relatedError) {
+            relatedCaption.textContent = uiState.relatedError;
+            relatedCaption.classList.add('is-error');
+        } else if (relatedEntry?.message) {
+            relatedCaption.textContent = relatedEntry.message;
+        } else if (relatedEntry?.results?.length) {
+            relatedCaption.textContent = `Top ${formatCountLabel(relatedEntry.results.length, 'match')}`;
+        } else {
+            relatedCaption.textContent = 'No related notes yet.';
+        }
+
+        relatedHeader.append(relatedTitle, relatedCaption);
+        relatedSection.append(relatedHeader);
+
+        if (relatedEntry?.results?.length) {
+            const relatedList = document.createElement('div');
+
+            relatedList.className = 'related-notes-list';
+            relatedEntry.results.forEach(({ note: relatedNote }) => {
+                relatedList.append(createRelatedNoteCard(relatedNote));
+            });
+            relatedSection.append(relatedList);
+        }
+
+        article.append(relatedSection);
+    }
+
     return article;
 }
 
@@ -1952,6 +2289,7 @@ async function autoTagSavedNote(noteId) {
             return [];
         }
 
+        invalidateRelatedNotesCache();
         setFeedback(`Saved. Added ${formatCountLabel(addedTags.length, 'auto-tag')}.`);
         refreshVisibleNotes();
         return addedTags;
@@ -1978,6 +2316,7 @@ function removeAutoTag(noteId, tag) {
         return false;
     }
 
+    invalidateRelatedNotesCache();
     setFeedback(`Removed auto-tag "${normalizedTag}".`);
     refreshVisibleNotes();
     return true;
@@ -2127,6 +2466,7 @@ async function saveNote({
             suggestionsWrap,
             suggestionsList
         });
+        invalidateRelatedNotesCache();
         contentInput.focus();
         setFeedback(successMessage);
         refreshVisibleNotes();
@@ -2167,6 +2507,7 @@ function renderNotesList() {
     });
 
     notesList.replaceChildren(fragment);
+    syncExpandedRelatedNotes();
 }
 
 function getCurrentPage() {
@@ -2487,6 +2828,16 @@ function renderHomePage() {
             return;
         }
 
+        if (target.matches('.note-expand')) {
+            toggleNoteExpansion(target.dataset.noteId);
+            return;
+        }
+
+        if (target.matches('.related-note-card')) {
+            openRelatedNote(target.dataset.noteId);
+            return;
+        }
+
         if (target.matches('.note-summarize')) {
             await summarizeNote(target.dataset.noteId);
             return;
@@ -2515,7 +2866,8 @@ function renderHomePage() {
             }
 
             setFeedback('Deleted.');
-            clearNoteUiState(target.dataset.noteId);
+            invalidateRelatedNotesCache();
+            clearNoteUiState(target.dataset.noteId, { force: true });
             refreshVisibleNotes();
         } catch (error) {
             console.error('Failed to delete note.', error);
