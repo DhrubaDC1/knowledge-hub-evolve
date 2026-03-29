@@ -18,6 +18,7 @@ const GRAPH_TAG_WEIGHT_SHARE = 0.55;
 const GRAPH_SIMILARITY_WEIGHT_SHARE = 0.45;
 const GRAPH_MIN_SCALE = 0.55;
 const GRAPH_MAX_SCALE = 2.4;
+const TIMELINE_DAY_GROUP_WINDOW_DAYS = 7;
 const UNTAGGED_FILTER_VALUE = '__untagged__';
 const UNTAGGED_FILTER_LABEL = 'untagged';
 const GRAPH_STOP_WORDS = new Set([
@@ -443,6 +444,78 @@ function formatJournalTime(dateValue) {
         minute: '2-digit',
         hour12: false
     }).format(date);
+}
+
+function formatTimelineDayHeader(dateValue) {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return 'Recent';
+    }
+
+    const today = new Date();
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const diffDays = Math.round((startOfToday - startOfDate) / 86_400_000);
+
+    if (diffDays === 0) {
+        return 'Today';
+    }
+
+    if (diffDays === 1) {
+        return 'Yesterday';
+    }
+
+    return new Intl.DateTimeFormat('en', { weekday: 'long' }).format(date);
+}
+
+function formatTimelineDayMeta(dateValue) {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return new Intl.DateTimeFormat('en', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+    }).format(date);
+}
+
+function formatTimelineWeekHeader(dateValue) {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return 'Earlier';
+    }
+
+    return `Week of ${new Intl.DateTimeFormat('en', {
+        month: 'short',
+        day: 'numeric'
+    }).format(date)}`;
+}
+
+function formatTimelineWeekMeta(startDateValue, endDateValue) {
+    const startDate = new Date(startDateValue);
+    const endDate = new Date(endDateValue);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+        return '';
+    }
+
+    const sameYear = startDate.getFullYear() === endDate.getFullYear();
+    const sameMonth = sameYear && startDate.getMonth() === endDate.getMonth();
+    const startText = new Intl.DateTimeFormat('en', {
+        month: 'short',
+        day: 'numeric'
+    }).format(startDate);
+    const endText = new Intl.DateTimeFormat('en', sameMonth
+        ? { day: 'numeric', year: 'numeric' }
+        : { month: 'short', day: 'numeric', year: 'numeric' }
+    ).format(endDate);
+
+    return `${startText} - ${endText}`;
 }
 
 function formatCountLabel(count, singular, plural = `${singular}s`) {
@@ -2330,7 +2403,9 @@ function syncGraphData(notes) {
 }
 
 function setActiveLibraryView(view) {
-    const nextView = view === 'graph' ? 'graph' : 'list';
+    const nextView = view === 'graph' || view === 'timeline'
+        ? view
+        : 'list';
 
     if (state.activeLibraryView !== nextView) {
         state.activeLibraryView = nextView;
@@ -2340,21 +2415,32 @@ function setActiveLibraryView(view) {
 
     if (nextView === 'graph') {
         renderGraphView();
+        return;
+    }
+
+    if (nextView === 'timeline') {
+        renderTimelineView();
     }
 }
 
 function syncLibraryView() {
     const listView = document.querySelector('#notes-list-view');
     const graphView = document.querySelector('#graph-view');
+    const timelineView = document.querySelector('#timeline-view');
     const tabButtons = document.querySelectorAll('.view-tab');
     const isGraphView = state.activeLibraryView === 'graph';
+    const isTimelineView = state.activeLibraryView === 'timeline';
 
     if (listView) {
-        listView.hidden = isGraphView;
+        listView.hidden = isGraphView || isTimelineView;
     }
 
     if (graphView) {
         graphView.hidden = !isGraphView;
+    }
+
+    if (timelineView) {
+        timelineView.hidden = !isTimelineView;
     }
 
     tabButtons.forEach((button) => {
@@ -2561,6 +2647,229 @@ function renderGraphView() {
     }
 
     renderGraphSelection();
+}
+
+function createDateKey(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
+
+function getTimelineGroupDescriptor(dateValue) {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return {
+            key: 'day:invalid',
+            kind: 'day',
+            label: 'Recent',
+            meta: '',
+            sortTime: 0
+        };
+    }
+
+    const noteDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const today = new Date();
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const diffDays = Math.round((startOfToday - noteDay) / 86_400_000);
+
+    if (diffDays < TIMELINE_DAY_GROUP_WINDOW_DAYS) {
+        return {
+            key: `day:${createDateKey(noteDay)}`,
+            kind: 'day',
+            label: formatTimelineDayHeader(noteDay),
+            meta: formatTimelineDayMeta(noteDay),
+            sortTime: noteDay.getTime()
+        };
+    }
+
+    const weekStart = new Date(noteDay);
+    const dayOfWeek = weekStart.getDay();
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+
+    weekStart.setDate(weekStart.getDate() + diffToMonday);
+    weekStart.setHours(0, 0, 0, 0);
+
+    const weekEnd = new Date(weekStart);
+
+    weekEnd.setDate(weekStart.getDate() + 6);
+
+    return {
+        key: `week:${createDateKey(weekStart)}`,
+        kind: 'week',
+        label: formatTimelineWeekHeader(weekStart),
+        meta: formatTimelineWeekMeta(weekStart, weekEnd),
+        sortTime: weekStart.getTime()
+    };
+}
+
+function buildTimelineGroups(notes) {
+    const groups = [];
+    const groupsByKey = new Map();
+    const sortedNotes = [...notes].sort((left, right) => {
+        return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    });
+
+    sortedNotes.forEach((note) => {
+        const descriptor = getTimelineGroupDescriptor(note.createdAt);
+        let group = groupsByKey.get(descriptor.key);
+
+        if (!group) {
+            group = {
+                ...descriptor,
+                items: []
+            };
+            groupsByKey.set(descriptor.key, group);
+            groups.push(group);
+        }
+
+        group.items.push(note);
+    });
+
+    return groups.sort((left, right) => right.sortTime - left.sortTime);
+}
+
+function createTimelineTag(tag) {
+    return createTagPill(tag);
+}
+
+function createTimelineItem(note) {
+    const article = document.createElement('article');
+    const rail = document.createElement('div');
+    const dot = document.createElement('span');
+    const card = document.createElement('div');
+    const topRow = document.createElement('div');
+    const heading = document.createElement('div');
+    const title = document.createElement('h4');
+    const meta = document.createElement('p');
+    const openButton = document.createElement('button');
+    const snippet = document.createElement('p');
+    const tags = document.createElement('div');
+    const previewText = note.summary || note.content || note.url || 'No preview available.';
+
+    article.className = 'timeline-item';
+    rail.className = 'timeline-item-rail';
+    dot.className = 'timeline-item-dot';
+    rail.append(dot);
+
+    card.className = 'timeline-item-card';
+    topRow.className = 'timeline-item-top';
+    heading.className = 'timeline-item-heading';
+
+    title.className = 'timeline-item-title';
+    title.textContent = note.title || (note.type === 'link' ? 'Saved link' : 'Untitled note');
+
+    meta.className = 'timeline-item-meta';
+    meta.textContent = `${note.type === 'link' ? 'Link' : 'Note'} • ${formatRelativeTime(note.createdAt)}`;
+
+    heading.append(title, meta);
+
+    openButton.className = 'timeline-item-action';
+    openButton.type = 'button';
+    openButton.dataset.noteId = note.id;
+    openButton.dataset.timelineAction = 'open-in-list';
+    openButton.textContent = 'Open in list';
+
+    topRow.append(heading, openButton);
+
+    snippet.className = 'timeline-item-snippet';
+    snippet.textContent = truncateText(previewText, 180);
+
+    tags.className = 'timeline-item-tags';
+
+    if (note.tags.length) {
+        note.tags.forEach((tag) => {
+            tags.append(createTimelineTag(tag));
+        });
+    } else {
+        const untagged = document.createElement('span');
+
+        untagged.className = 'note-tag note-tag-muted';
+        untagged.textContent = UNTAGGED_FILTER_LABEL;
+        tags.append(untagged);
+    }
+
+    card.append(topRow, snippet, tags);
+    article.append(rail, card);
+
+    return article;
+}
+
+function createTimelineGroup(group) {
+    const section = document.createElement('section');
+    const header = document.createElement('div');
+    const heading = document.createElement('div');
+    const label = document.createElement('h3');
+    const meta = document.createElement('p');
+    const count = document.createElement('span');
+    const list = document.createElement('div');
+
+    section.className = 'timeline-group';
+    section.dataset.timelineGroup = group.kind;
+    header.className = 'timeline-group-header';
+    heading.className = 'timeline-group-heading';
+
+    label.className = 'timeline-group-label';
+    label.textContent = group.label;
+
+    meta.className = 'timeline-group-meta';
+    meta.textContent = group.meta;
+
+    heading.append(label);
+
+    if (group.meta) {
+        heading.append(meta);
+    }
+
+    count.className = 'timeline-group-count';
+    count.textContent = formatCountLabel(group.items.length, 'entry');
+
+    list.className = 'timeline-group-list';
+    group.items.forEach((note) => {
+        list.append(createTimelineItem(note));
+    });
+
+    header.append(heading, count);
+    section.append(header, list);
+
+    return section;
+}
+
+function renderTimelineView(allNotes = Storage.getAll()) {
+    const timeline = document.querySelector('#notes-timeline');
+    const timelineHint = document.querySelector('#timeline-hint');
+    const timelineCount = document.querySelector('#timeline-count');
+
+    if (!timeline) {
+        return;
+    }
+
+    if (timelineHint) {
+        timelineHint.textContent = state.notes.length
+            ? 'Recent entries are grouped by day. Older entries roll up by week.'
+            : 'Your saved notes will appear here as a vertical timeline.';
+    }
+
+    if (timelineCount) {
+        timelineCount.textContent = state.notes.length
+            ? formatCountLabel(state.notes.length, 'entry')
+            : '0 entries';
+    }
+
+    if (!state.notes.length) {
+        timeline.replaceChildren(createEmptyState(allNotes));
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    buildTimelineGroups(state.notes).forEach((group) => {
+        fragment.append(createTimelineGroup(group));
+    });
+
+    timeline.replaceChildren(fragment);
 }
 
 function createTagPill(tag, options = {}) {
@@ -3869,6 +4178,7 @@ function renderNotesList() {
     if (!state.notes.length) {
         notesList.replaceChildren(createEmptyState(allNotes));
         renderGraphView();
+        renderTimelineView(allNotes);
         return;
     }
 
@@ -3882,6 +4192,7 @@ function renderNotesList() {
     syncExpandedRelatedNotes();
     ensureVisibleInsights(state.notes);
     renderGraphView();
+    renderTimelineView(allNotes);
 }
 
 function getCurrentPage() {
@@ -4036,8 +4347,9 @@ function renderHomePage() {
                     <div id="notes-tag-filters" class="tag-filter-bar" aria-label="Filter notes by tag" hidden></div>
                     <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
                     <div class="view-tabs" role="tablist" aria-label="Library views">
-                        <button class="view-tab is-active" type="button" role="tab" aria-selected="true" data-library-view="list">List</button>
-                        <button class="view-tab" type="button" role="tab" aria-selected="false" tabindex="-1" data-library-view="graph">Graph</button>
+                        <button class="view-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="notes-list-view" data-library-view="list">List</button>
+                        <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="graph-view" tabindex="-1" data-library-view="graph">Graph</button>
+                        <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="timeline-view" tabindex="-1" data-library-view="timeline">Timeline</button>
                     </div>
 
                     <div id="notes-list-view" class="library-view-panel">
@@ -4062,6 +4374,15 @@ function renderHomePage() {
                             <aside id="graph-note-panel" class="graph-note-panel" aria-live="polite"></aside>
                         </div>
                     </section>
+
+                    <section id="timeline-view" class="timeline-view" hidden>
+                        <div class="timeline-panel-header">
+                            <p id="timeline-hint" class="timeline-hint">Recent entries are grouped by day. Older entries roll up by week.</p>
+                            <span id="timeline-count" class="timeline-count">0 entries</span>
+                        </div>
+
+                        <div id="notes-timeline" class="notes-timeline" aria-live="polite"></div>
+                    </section>
                 </section>
             </div>
         </main>
@@ -4081,6 +4402,7 @@ function renderHomePage() {
     const saveButton = document.querySelector('#save-note');
     const notesList = document.querySelector('#notes-list');
     const graphNotePanel = document.querySelector('#graph-note-panel');
+    const timelineView = document.querySelector('#timeline-view');
     const themeToggle = document.querySelector('#theme-toggle');
     const captureTagControls = {
         tagsInput,
@@ -4284,6 +4606,21 @@ function renderHomePage() {
     graphNotePanel?.addEventListener('click', (event) => {
         const target = event.target instanceof HTMLElement
             ? event.target.closest('[data-graph-action="open-in-list"]')
+            : null;
+
+        if (!(target instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        setActiveLibraryView('list');
+        window.requestAnimationFrame(() => {
+            focusNoteCard(target.dataset.noteId);
+        });
+    });
+
+    timelineView?.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest('[data-timeline-action="open-in-list"]')
             : null;
 
         if (!(target instanceof HTMLButtonElement)) {

@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `phase3-visualization`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `16`
+- Completed tasks: `17`
 - Completed issues: `1`
 
 ## Implemented
@@ -33,13 +33,14 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `p2-related-notes`: Related notes suggestions
 - `p3-graph-data`: Graph data model
 - `p3-graph-view`: Force-directed graph visualization
+- `p3-timeline`: Learning timeline
 
 ## Recent Changes
+- `c80efe1 evolve(p3-graph-view): Force-directed graph visualization`
 - `0d218d9 evolve(p3-graph-data): Graph data model`
 - `e3941a6 evolve(p2-related-notes): Related notes suggestions`
 - `0bbd5ab chore(journal): update timeline`
 - `38a222d evolve(p2-auto-tag): Auto-tag on save`
-- `c360894 evolve(mvp-deploy-check): Deployment verification`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
@@ -47,7 +48,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
 - Next manifest task candidate: `p2-key-insights` in phase `phase2-intelligence` — Key insight extraction
 - Next manifest task candidate: `p2-chrome-extension` in phase `phase2-intelligence` — Chrome extension scaffold
-- Next manifest task candidate: `p3-timeline` in phase `phase3-visualization` — Learning timeline
+- Next manifest task candidate: `p3-clustering` in phase `phase3-visualization` — Topic clustering
 
 ## Resolved Issues
 - `#2`
