@@ -105,6 +105,30 @@ function createEmptyCapturePdfState() {
     };
 }
 
+function createEmptyPatternAnalysis() {
+    return {
+        topTopics: [],
+        learningStreak: {
+            current: 0,
+            longest: 0,
+            activeDays: 0,
+            lastActiveDate: ''
+        },
+        weeklyTrend: {
+            days: [],
+            currentTotal: 0,
+            previousTotal: 0,
+            delta: 0,
+            direction: 'steady'
+        },
+        diversityScore: {
+            score: 0,
+            label: 'Narrow',
+            uniqueTopics: 0
+        }
+    };
+}
+
 const state = {
     notes: [],
     query: '',
@@ -145,6 +169,13 @@ const state = {
     journal: null,
     isJournalLoading: false,
     journalError: '',
+    patternAnalysis: createEmptyPatternAnalysis(),
+    isPatternAnalysisLoading: false,
+    patternAnalysisError: '',
+    patternAnalysisFingerprint: '',
+    patternAnalysisResolvedFingerprint: '',
+    patternAnalysisRequestFingerprint: '',
+    patternAnalysisRequestToken: 0,
     themePreference: readThemePreference(),
     activeTheme: 'light'
 };
@@ -1750,6 +1781,23 @@ function createClusterFingerprint(notes = []) {
         .join('||');
 }
 
+function createPatternAnalysisFingerprint(notes = []) {
+    return (Array.isArray(notes) ? notes : [])
+        .map((note) => {
+            const noteId = note?.id ? String(note.id) : '';
+            const updatedAt = typeof note?.updatedAt === 'string' ? note.updatedAt : '';
+            const createdAt = typeof note?.createdAt === 'string' ? note.createdAt : '';
+            const tags = Array.isArray(note?.tags)
+                ? [...note.tags].sort((left, right) => left.localeCompare(right)).join('|')
+                : '';
+
+            return noteId ? `${noteId}:${updatedAt}:${createdAt}:${tags}` : '';
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right))
+        .join('||');
+}
+
 function normalizeClusterData(payload, notes = []) {
     if (!payload || typeof payload !== 'object') {
         return clusterNotesByOverlappingTags(notes);
@@ -1831,6 +1879,106 @@ function collectKnowledgeMetrics(notes) {
         summaryCount,
         tagCount: uniqueTags.size
     };
+}
+
+function normalizePatternAnalysis(payload) {
+    if (!payload || typeof payload !== 'object') {
+        return createEmptyPatternAnalysis();
+    }
+
+    const topTopics = Array.isArray(payload.topTopics)
+        ? payload.topTopics
+            .map((entry) => ({
+                topic: typeof entry?.topic === 'string' ? entry.topic.trim() : '',
+                count: Number.isFinite(Number(entry?.count))
+                    ? Math.max(0, Math.round(Number(entry.count)))
+                    : 0,
+                score: Number.isFinite(Number(entry?.score))
+                    ? Number(Number(entry.score).toFixed(2))
+                    : 0,
+                share: Number.isFinite(Number(entry?.share))
+                    ? Math.max(0, Math.min(100, Math.round(Number(entry.share))))
+                    : 0
+            }))
+            .filter((entry) => entry.topic)
+            .slice(0, 5)
+        : [];
+    const learningStreak = payload.learningStreak && typeof payload.learningStreak === 'object'
+        ? {
+            current: Number.isFinite(Number(payload.learningStreak.current))
+                ? Math.max(0, Math.round(Number(payload.learningStreak.current)))
+                : 0,
+            longest: Number.isFinite(Number(payload.learningStreak.longest))
+                ? Math.max(0, Math.round(Number(payload.learningStreak.longest)))
+                : 0,
+            activeDays: Number.isFinite(Number(payload.learningStreak.activeDays))
+                ? Math.max(0, Math.round(Number(payload.learningStreak.activeDays)))
+                : 0,
+            lastActiveDate: typeof payload.learningStreak.lastActiveDate === 'string'
+                ? payload.learningStreak.lastActiveDate
+                : ''
+        }
+        : createEmptyPatternAnalysis().learningStreak;
+    const weeklyTrend = payload.weeklyTrend && typeof payload.weeklyTrend === 'object'
+        ? {
+            days: Array.isArray(payload.weeklyTrend.days)
+                ? payload.weeklyTrend.days
+                    .map((entry) => ({
+                        date: typeof entry?.date === 'string' ? entry.date : '',
+                        label: typeof entry?.label === 'string' ? entry.label : '',
+                        count: Number.isFinite(Number(entry?.count))
+                            ? Math.max(0, Math.round(Number(entry.count)))
+                            : 0
+                    }))
+                    .filter((entry) => entry.date)
+                    .slice(0, 7)
+                : [],
+            currentTotal: Number.isFinite(Number(payload.weeklyTrend.currentTotal))
+                ? Math.max(0, Math.round(Number(payload.weeklyTrend.currentTotal)))
+                : 0,
+            previousTotal: Number.isFinite(Number(payload.weeklyTrend.previousTotal))
+                ? Math.max(0, Math.round(Number(payload.weeklyTrend.previousTotal)))
+                : 0,
+            delta: Number.isFinite(Number(payload.weeklyTrend.delta))
+                ? Math.round(Number(payload.weeklyTrend.delta))
+                : 0,
+            direction: payload.weeklyTrend.direction === 'up' || payload.weeklyTrend.direction === 'down'
+                ? payload.weeklyTrend.direction
+                : 'steady'
+        }
+        : createEmptyPatternAnalysis().weeklyTrend;
+    const diversityScore = payload.diversityScore && typeof payload.diversityScore === 'object'
+        ? {
+            score: Number.isFinite(Number(payload.diversityScore.score))
+                ? Math.max(0, Math.min(100, Math.round(Number(payload.diversityScore.score))))
+                : 0,
+            label: typeof payload.diversityScore.label === 'string' && payload.diversityScore.label.trim()
+                ? payload.diversityScore.label.trim()
+                : 'Narrow',
+            uniqueTopics: Number.isFinite(Number(payload.diversityScore.uniqueTopics))
+                ? Math.max(0, Math.round(Number(payload.diversityScore.uniqueTopics)))
+                : 0
+        }
+        : createEmptyPatternAnalysis().diversityScore;
+
+    return {
+        topTopics,
+        learningStreak,
+        weeklyTrend,
+        diversityScore
+    };
+}
+
+function formatTrendDirection(direction) {
+    if (direction === 'up') {
+        return 'Rising';
+    }
+
+    if (direction === 'down') {
+        return 'Cooling';
+    }
+
+    return 'Steady';
 }
 
 function parseTags(value) {
@@ -3155,6 +3303,44 @@ async function requestClusterResults(notes) {
     return normalizeClusterData(payload, notes);
 }
 
+async function requestPatternAnalysis(notes) {
+    const response = await fetch('/api/analyze-patterns', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            notes: notes.map((note) => ({
+                id: note.id,
+                title: note.title,
+                content: note.content,
+                summary: note.summary,
+                tags: note.tags,
+                createdAt: note.createdAt,
+                updatedAt: note.updatedAt
+            }))
+        })
+    });
+
+    let payload = null;
+
+    try {
+        payload = await response.json();
+    } catch (error) {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error('Pattern analysis API not found. Run the app with `npm run dev` so Vercel serves `/api/analyze-patterns`.');
+        }
+
+        throw new Error(payload?.error || 'Could not analyze note patterns right now.');
+    }
+
+    return normalizePatternAnalysis(payload);
+}
+
 function createRelatedResults(results, currentNoteId) {
     return (Array.isArray(results) ? results : [])
         .filter(({ note }) => note?.id && note.id !== currentNoteId)
@@ -3646,6 +3832,36 @@ async function refreshClusterData(notes, fingerprint, requestToken) {
     }
 }
 
+async function refreshPatternAnalysis(notes, fingerprint, requestToken) {
+    try {
+        const patternAnalysis = await requestPatternAnalysis(notes);
+
+        if (requestToken !== state.patternAnalysisRequestToken || fingerprint !== state.patternAnalysisFingerprint) {
+            return;
+        }
+
+        state.patternAnalysis = patternAnalysis;
+        state.isPatternAnalysisLoading = false;
+        state.patternAnalysisError = '';
+        state.patternAnalysisResolvedFingerprint = fingerprint;
+        state.patternAnalysisRequestFingerprint = '';
+        renderInsightsView(notes);
+    } catch (error) {
+        if (requestToken !== state.patternAnalysisRequestToken || fingerprint !== state.patternAnalysisFingerprint) {
+            return;
+        }
+
+        console.error('Failed to analyze note patterns via API.', error);
+        state.isPatternAnalysisLoading = false;
+        state.patternAnalysisError = error instanceof Error
+            ? error.message
+            : 'Could not analyze note patterns right now.';
+        state.patternAnalysisResolvedFingerprint = fingerprint;
+        state.patternAnalysisRequestFingerprint = '';
+        renderInsightsView(notes);
+    }
+}
+
 function syncClusterData(notes) {
     const nextNotes = Array.isArray(notes) ? notes : [];
     const fingerprint = createClusterFingerprint(nextNotes);
@@ -3666,6 +3882,32 @@ function syncClusterData(notes) {
     state.clusterRequestToken += 1;
     state.clusterRequestFingerprint = fingerprint;
     void refreshClusterData(nextNotes, fingerprint, state.clusterRequestToken);
+}
+
+function syncPatternAnalysis(notes) {
+    const nextNotes = Array.isArray(notes) ? notes : [];
+    const fingerprint = createPatternAnalysisFingerprint(nextNotes);
+
+    state.patternAnalysisFingerprint = fingerprint;
+
+    if (!fingerprint) {
+        state.patternAnalysis = createEmptyPatternAnalysis();
+        state.isPatternAnalysisLoading = false;
+        state.patternAnalysisError = '';
+        state.patternAnalysisResolvedFingerprint = '';
+        state.patternAnalysisRequestFingerprint = '';
+        return;
+    }
+
+    if (state.patternAnalysisResolvedFingerprint === fingerprint || state.patternAnalysisRequestFingerprint === fingerprint) {
+        return;
+    }
+
+    state.patternAnalysisRequestToken += 1;
+    state.isPatternAnalysisLoading = true;
+    state.patternAnalysisError = '';
+    state.patternAnalysisRequestFingerprint = fingerprint;
+    void refreshPatternAnalysis(nextNotes, fingerprint, state.patternAnalysisRequestToken);
 }
 
 function setFeedback(message) {
@@ -3690,7 +3932,7 @@ function syncGraphData(notes) {
 }
 
 function setActiveLibraryView(view) {
-    const nextView = view === 'graph' || view === 'timeline'
+    const nextView = view === 'insights' || view === 'graph' || view === 'timeline'
         ? view
         : 'list';
 
@@ -3707,19 +3949,30 @@ function setActiveLibraryView(view) {
 
     if (nextView === 'timeline') {
         renderTimelineView();
+        return;
+    }
+
+    if (nextView === 'insights') {
+        renderInsightsView();
     }
 }
 
 function syncLibraryView() {
     const listView = document.querySelector('#notes-list-view');
     const graphView = document.querySelector('#graph-view');
+    const insightsView = document.querySelector('#insights-view');
     const timelineView = document.querySelector('#timeline-view');
     const tabButtons = document.querySelectorAll('.view-tab');
+    const isInsightsView = state.activeLibraryView === 'insights';
     const isGraphView = state.activeLibraryView === 'graph';
     const isTimelineView = state.activeLibraryView === 'timeline';
 
     if (listView) {
-        listView.hidden = isGraphView || isTimelineView;
+        listView.hidden = isInsightsView || isGraphView || isTimelineView;
+    }
+
+    if (insightsView) {
+        insightsView.hidden = !isInsightsView;
     }
 
     if (graphView) {
@@ -3740,6 +3993,216 @@ function syncLibraryView() {
     });
 
     graphCanvasController.setActive(isGraphView);
+}
+
+function createInsightsStatCard({ label, value, meta, tone = 'default' }) {
+    const card = document.createElement('article');
+    const labelElement = document.createElement('p');
+    const valueElement = document.createElement('strong');
+    const metaElement = document.createElement('p');
+
+    card.className = 'insight-stat-card';
+    card.dataset.tone = tone;
+
+    labelElement.className = 'insight-stat-label';
+    labelElement.textContent = label;
+
+    valueElement.className = 'insight-stat-value';
+    valueElement.textContent = value;
+
+    metaElement.className = 'insight-stat-meta';
+    metaElement.textContent = meta;
+
+    card.append(labelElement, valueElement, metaElement);
+
+    return card;
+}
+
+function createInsightTopicPill(topicEntry = {}) {
+    const item = document.createElement('li');
+    const pill = document.createElement('div');
+    const topic = document.createElement('span');
+    const meta = document.createElement('span');
+
+    item.className = 'insight-topic-item';
+    pill.className = 'insight-topic-pill';
+    topic.className = 'insight-topic-label';
+    topic.textContent = topicEntry.topic || 'untitled';
+    meta.className = 'insight-topic-meta';
+    meta.textContent = `${formatCountLabel(topicEntry.count || 0, 'note')} • ${topicEntry.share || 0}%`;
+    pill.append(topic, meta);
+    item.append(pill);
+
+    return item;
+}
+
+function createTrendDay(day = {}, maxCount = 0) {
+    const item = document.createElement('div');
+    const bar = document.createElement('div');
+    const fill = document.createElement('span');
+    const count = document.createElement('span');
+    const label = document.createElement('span');
+    const barHeight = maxCount > 0 ? Math.max(10, Math.round((day.count / maxCount) * 100)) : 10;
+
+    item.className = 'trend-day';
+    bar.className = 'trend-day-bar';
+    fill.className = 'trend-day-fill';
+    fill.style.setProperty('--trend-bar-height', `${barHeight}%`);
+    fill.setAttribute('aria-hidden', 'true');
+    count.className = 'trend-day-count';
+    count.textContent = String(day.count || 0);
+    label.className = 'trend-day-label';
+    label.textContent = day.label || '';
+    bar.title = `${day.label || ''}: ${formatCountLabel(day.count || 0, 'note')}`;
+    bar.append(fill);
+    item.append(count, bar, label);
+
+    return item;
+}
+
+function renderInsightsView(allNotes = Storage.getAll()) {
+    const view = document.querySelector('#insights-view');
+    const status = document.querySelector('#insights-status');
+    const stats = document.querySelector('#insights-stats');
+    const topics = document.querySelector('#insights-topics');
+    const trend = document.querySelector('#insights-trend');
+    const summary = document.querySelector('#insights-summary');
+
+    if (!view || !status || !stats || !topics || !trend || !summary) {
+        return;
+    }
+
+    const noteCount = Array.isArray(allNotes) ? allNotes.length : 0;
+    const patternAnalysis = state.patternAnalysis;
+    const trendData = patternAnalysis.weeklyTrend;
+    const topTopic = patternAnalysis.topTopics[0] || null;
+
+    if (!noteCount) {
+        status.textContent = 'Save a few notes to unlock pattern analysis.';
+        summary.textContent = 'Insights appear once the library has enough activity to summarize.';
+        stats.replaceChildren(
+            createInsightsStatCard({
+                label: 'Learning streak',
+                value: '0 days',
+                meta: 'No activity yet.',
+                tone: 'muted'
+            }),
+            createInsightsStatCard({
+                label: 'Diversity score',
+                value: '0',
+                meta: 'Add notes across different topics.',
+                tone: 'muted'
+            }),
+            createInsightsStatCard({
+                label: 'Weekly trend',
+                value: 'Steady',
+                meta: 'No recent activity yet.',
+                tone: 'muted'
+            }),
+            createInsightsStatCard({
+                label: 'Top topic',
+                value: 'None',
+                meta: 'Tags and note content will surface here.',
+                tone: 'muted'
+            })
+        );
+        topics.replaceChildren();
+        trend.replaceChildren();
+        return;
+    }
+
+    if (state.isPatternAnalysisLoading && !state.patternAnalysisResolvedFingerprint) {
+        status.textContent = 'Analyzing patterns...';
+    } else if (state.patternAnalysisError) {
+        status.textContent = state.patternAnalysisError;
+    } else {
+        status.textContent = 'Patterns across your full saved library.';
+    }
+
+    summary.textContent = state.isPatternAnalysisLoading && !state.patternAnalysisError
+        ? 'Refreshing topic coverage, streaks, and weekly activity.'
+        : `Based on ${formatCountLabel(noteCount, 'saved item')}, not just the current search results.`;
+
+    stats.replaceChildren(
+        createInsightsStatCard({
+            label: 'Learning streak',
+            value: `${patternAnalysis.learningStreak.current} day${patternAnalysis.learningStreak.current === 1 ? '' : 's'}`,
+            meta: patternAnalysis.learningStreak.longest > 0
+                ? `Longest run: ${patternAnalysis.learningStreak.longest} day${patternAnalysis.learningStreak.longest === 1 ? '' : 's'}`
+                : 'Start saving daily to build a streak.',
+            tone: 'accent'
+        }),
+        createInsightsStatCard({
+            label: 'Diversity score',
+            value: `${patternAnalysis.diversityScore.score}`,
+            meta: `${patternAnalysis.diversityScore.label} spread across ${formatCountLabel(patternAnalysis.diversityScore.uniqueTopics, 'topic')}`,
+            tone: 'default'
+        }),
+        createInsightsStatCard({
+            label: 'Weekly trend',
+            value: formatTrendDirection(trendData.direction),
+            meta: `${formatCountLabel(trendData.currentTotal, 'note')} this week vs ${formatCountLabel(trendData.previousTotal, 'note')} last week`,
+            tone: trendData.direction === 'up' ? 'accent' : (trendData.direction === 'down' ? 'warning' : 'default')
+        }),
+        createInsightsStatCard({
+            label: 'Top topic',
+            value: topTopic ? topTopic.topic : 'Mixed',
+            meta: topTopic
+                ? `${formatCountLabel(topTopic.count, 'note')} • ${topTopic.share}% of library`
+                : 'Add tags or richer note content to sharpen this.',
+            tone: 'default'
+        })
+    );
+
+    topics.replaceChildren();
+
+    if (patternAnalysis.topTopics.length) {
+        const topicList = document.createElement('ul');
+
+        topicList.className = 'insight-topic-list';
+        patternAnalysis.topTopics.forEach((topicEntry) => {
+            topicList.append(createInsightTopicPill(topicEntry));
+        });
+        topics.append(topicList);
+    } else {
+        const emptyTopics = document.createElement('p');
+
+        emptyTopics.className = 'insights-empty-copy';
+        emptyTopics.textContent = 'Top topics will appear once the notes have stronger recurring themes.';
+        topics.append(emptyTopics);
+    }
+
+    trend.replaceChildren();
+
+    if (trendData.days.length) {
+        const trendHeader = document.createElement('div');
+        const trendTitle = document.createElement('p');
+        const trendMeta = document.createElement('p');
+        const trendBars = document.createElement('div');
+        const maxCount = Math.max(...trendData.days.map((day) => day.count), 0);
+
+        trendHeader.className = 'trend-header';
+        trendTitle.className = 'trend-title';
+        trendTitle.textContent = 'Last 7 days';
+        trendMeta.className = 'trend-meta';
+        trendMeta.textContent = state.patternAnalysisError
+            ? 'Showing the latest successful analysis.'
+            : `Direction: ${formatTrendDirection(trendData.direction)}`;
+        trendHeader.append(trendTitle, trendMeta);
+
+        trendBars.className = 'trend-bars';
+        trendData.days.forEach((day) => {
+            trendBars.append(createTrendDay(day, maxCount));
+        });
+
+        trend.append(trendHeader, trendBars);
+    } else {
+        const emptyTrend = document.createElement('p');
+
+        emptyTrend.className = 'insights-empty-copy';
+        emptyTrend.textContent = 'Weekly activity will appear once your notes have timestamps to compare.';
+        trend.append(emptyTrend);
+    }
 }
 
 function syncGraphSelection(notes = state.notes) {
@@ -5650,6 +6113,7 @@ function renderNotesList() {
     syncClusterData(state.notes);
     syncGraphData(state.notes);
     syncGraphSelection(state.notes);
+    syncPatternAnalysis(allNotes);
 
     syncOverview(allNotes);
     syncNotesPresentation(allNotes);
@@ -5658,6 +6122,7 @@ function renderNotesList() {
 
     if (!state.notes.length) {
         notesList.replaceChildren(createEmptyState(allNotes));
+        renderInsightsView(allNotes);
         renderGraphView();
         renderTimelineView(allNotes);
         return;
@@ -5666,6 +6131,7 @@ function renderNotesList() {
     renderClusteredNotesList(notesList, state.notes);
     syncExpandedRelatedNotes();
     ensureVisibleInsights(state.notes);
+    renderInsightsView(allNotes);
     renderGraphView();
     renderTimelineView(allNotes);
 }
@@ -5918,6 +6384,7 @@ function renderHomePage() {
                     <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
                     <div class="view-tabs" role="tablist" aria-label="Library views">
                         <button class="view-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="notes-list-view" data-library-view="list">List</button>
+                        <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="insights-view" tabindex="-1" data-library-view="insights">Insights</button>
                         <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="graph-view" tabindex="-1" data-library-view="graph">Graph</button>
                         <button class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="timeline-view" tabindex="-1" data-library-view="timeline">Timeline</button>
                     </div>
@@ -5925,6 +6392,38 @@ function renderHomePage() {
                     <div id="notes-list-view" class="library-view-panel">
                         <div id="notes-list" class="notes-list" aria-live="polite"></div>
                     </div>
+
+                    <section id="insights-view" class="insights-view" hidden>
+                        <div class="insights-panel-header">
+                            <div class="insights-copy">
+                                <p class="panel-kicker">Patterns</p>
+                                <h3 class="insights-title">Learning insights</h3>
+                                <p id="insights-summary" class="insights-summary">Patterns across your full saved library.</p>
+                            </div>
+
+                            <span id="insights-status" class="insights-status" aria-live="polite">Analyzing patterns...</span>
+                        </div>
+
+                        <div id="insights-stats" class="insights-stats" aria-live="polite"></div>
+
+                        <div class="insights-grid">
+                            <section class="insights-section">
+                                <div class="insights-section-header">
+                                    <p class="insights-section-kicker">Top topics</p>
+                                    <p class="insights-section-meta">Top 5 recurring themes from tags and note content.</p>
+                                </div>
+                                <div id="insights-topics" class="insights-topics" aria-live="polite"></div>
+                            </section>
+
+                            <section class="insights-section">
+                                <div class="insights-section-header">
+                                    <p class="insights-section-kicker">Weekly trend</p>
+                                    <p class="insights-section-meta">A CSS-only snapshot of recent activity.</p>
+                                </div>
+                                <div id="insights-trend" class="insights-trend" aria-live="polite"></div>
+                            </section>
+                        </div>
+                    </section>
 
                     <section id="graph-view" class="graph-view" hidden>
                         <div class="graph-panel-header">

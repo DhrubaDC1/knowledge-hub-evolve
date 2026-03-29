@@ -1151,6 +1151,235 @@ a {
     min-width: 0;
 }
 
+.insights-view {
+    display: grid;
+    gap: var(--space-5);
+}
+
+.insights-panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+}
+
+.insights-copy {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.insights-title {
+    font-size: 1.2rem;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+}
+
+.insights-summary,
+.insights-status,
+.insight-stat-meta,
+.insights-section-meta,
+.trend-meta,
+.trend-day-label,
+.trend-day-count,
+.insight-topic-meta,
+.insights-empty-copy {
+    color: var(--text-muted);
+}
+
+.insights-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.3rem;
+    max-width: min(100%, 34rem);
+    padding: 0.45rem 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-strong);
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.insights-stats {
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.insight-stat-card {
+    display: grid;
+    gap: var(--space-2);
+    min-height: 10.5rem;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius-md) + 2px);
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 14%, transparent), transparent 82%),
+        var(--surface-strong);
+    box-shadow: var(--shadow-sm);
+}
+
+.insight-stat-card[data-tone='accent'] {
+    border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 34%, transparent), transparent 78%),
+        var(--surface-strong);
+}
+
+.insight-stat-card[data-tone='warning'] {
+    background:
+        linear-gradient(180deg, color-mix(in srgb, #d97706 12%, transparent), transparent 78%),
+        var(--surface-strong);
+}
+
+.insight-stat-card[data-tone='muted'] {
+    background: color-mix(in srgb, var(--surface-muted) 94%, transparent);
+}
+
+.insight-stat-label {
+    color: var(--accent-strong);
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.insight-stat-value {
+    font-size: clamp(1.8rem, 4vw, 2.7rem);
+    line-height: 0.98;
+    letter-spacing: -0.06em;
+    text-transform: none;
+    overflow-wrap: anywhere;
+}
+
+.insight-stat-meta {
+    font-size: 0.88rem;
+}
+
+.insights-grid {
+    display: grid;
+    gap: var(--space-5);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+}
+
+.insights-section {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius-md) + 2px);
+    background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
+    box-shadow: var(--shadow-sm);
+}
+
+.insights-section-header {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.insights-section-kicker {
+    color: var(--accent-strong);
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.insights-section-meta {
+    font-size: 0.88rem;
+}
+
+.insight-topic-list {
+    display: grid;
+    gap: var(--space-3);
+    list-style: none;
+}
+
+.insight-topic-item {
+    min-width: 0;
+}
+
+.insight-topic-pill {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: 0.9rem 1rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--accent-soft) 22%, var(--surface-strong));
+}
+
+.insight-topic-label,
+.trend-title {
+    font-size: 0.96rem;
+    font-weight: 700;
+}
+
+.insight-topic-label {
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.insight-topic-meta,
+.trend-meta,
+.trend-day-count,
+.trend-day-label {
+    font-size: 0.82rem;
+}
+
+.trend-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.trend-bars {
+    display: grid;
+    gap: var(--space-3);
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    align-items: end;
+    min-height: 220px;
+}
+
+.trend-day {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: center;
+}
+
+.trend-day-bar {
+    display: flex;
+    align-items: flex-end;
+    width: 100%;
+    min-height: 150px;
+    padding: 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius-sm) + 2px);
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 16%, transparent), transparent 100%),
+        color-mix(in srgb, var(--surface-muted) 92%, transparent);
+}
+
+.trend-day-fill {
+    display: block;
+    width: 100%;
+    height: var(--trend-bar-height, 10%);
+    border-radius: calc(var(--radius-sm) - 4px);
+    background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 76%, white 10%));
+    box-shadow: 0 16px 32px color-mix(in srgb, var(--accent-soft) 42%, transparent);
+}
+
+.insights-empty-copy {
+    font-size: 0.92rem;
+}
+
 .graph-view {
     display: grid;
     gap: var(--space-5);
@@ -2595,6 +2824,14 @@ a:active {
     .graph-stage {
         grid-template-columns: 1fr;
     }
+
+    .insights-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .insights-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 @media (max-width: 860px) {
@@ -2628,7 +2865,8 @@ a:active {
     }
 
     .hero-metrics,
-    .notes-list {
+    .notes-list,
+    .insights-stats {
         grid-template-columns: 1fr;
     }
 
@@ -2713,6 +2951,14 @@ a:active {
     .graph-canvas-shell,
     .graph-canvas {
         min-height: 380px;
+    }
+
+    .trend-bars {
+        min-height: 180px;
+    }
+
+    .trend-day-bar {
+        min-height: 124px;
     }
 
     .timeline-panel-header {
@@ -2803,6 +3049,12 @@ a:active {
 
     .graph-note-panel {
         padding: var(--space-4);
+    }
+
+    .insight-topic-pill,
+    .trend-header {
+        align-items: flex-start;
+        flex-direction: column;
     }
 
     .timeline-item {
