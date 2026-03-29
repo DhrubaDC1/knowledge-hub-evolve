@@ -16,6 +16,8 @@ const GRAPH_MIN_EDGE_WEIGHT = 0.14;
 const GRAPH_MIN_SIMILARITY_SCORE = 0.18;
 const GRAPH_TAG_WEIGHT_SHARE = 0.55;
 const GRAPH_SIMILARITY_WEIGHT_SHARE = 0.45;
+const GRAPH_MIN_SCALE = 0.55;
+const GRAPH_MAX_SCALE = 2.4;
 const UNTAGGED_FILTER_VALUE = '__untagged__';
 const UNTAGGED_FILTER_LABEL = 'untagged';
 const GRAPH_STOP_WORDS = new Set([
@@ -73,10 +75,12 @@ const state = {
     searchSource: '',
     searchStatusMessage: '',
     resolvedSearchQuery: '',
+    activeLibraryView: 'list',
     graphData: {
         nodes: [],
         edges: []
     },
+    selectedGraphNoteId: '',
     searchRequestToken: 0,
     searchDebounceTimer: null,
     isFilteringByTag: false,
@@ -292,6 +296,7 @@ function applyThemePreference() {
 
     updateThemeMetaColor(activeTheme);
     updateThemeToggle();
+    graphCanvasController.refresh();
 }
 
 function toggleThemePreference() {
@@ -936,6 +941,686 @@ class GraphBuilder {
 
 window.GraphBuilder = GraphBuilder;
 const graphBuilder = new GraphBuilder();
+
+class GraphCanvasController {
+    constructor({ onSelect } = {}) {
+        this.canvas = null;
+        this.context = null;
+        this.resizeObserver = null;
+        this.onSelect = typeof onSelect === 'function' ? onSelect : () => {};
+        this.nodes = [];
+        this.edges = [];
+        this.nodeMap = new Map();
+        this.selectedNoteId = '';
+        this.hoveredNoteId = '';
+        this.draggedNode = null;
+        this.dragPointerOffset = { x: 0, y: 0 };
+        this.isPanning = false;
+        this.panOrigin = { x: 0, y: 0 };
+        this.panStart = { x: 0, y: 0 };
+        this.pointerDownNodeId = '';
+        this.pointerDownPosition = { x: 0, y: 0 };
+        this.didPointerMove = false;
+        this.frameId = 0;
+        this.shouldAnimate = false;
+        this.isActive = false;
+        this.width = 0;
+        this.height = 0;
+        this.dpr = window.devicePixelRatio || 1;
+        this.transform = {
+            x: 0,
+            y: 0,
+            scale: 1
+        };
+
+        this.handlePointerDown = this.handlePointerDown.bind(this);
+        this.handlePointerMove = this.handlePointerMove.bind(this);
+        this.handlePointerUp = this.handlePointerUp.bind(this);
+        this.handlePointerLeave = this.handlePointerLeave.bind(this);
+        this.handleWheel = this.handleWheel.bind(this);
+        this.handleResize = this.handleResize.bind(this);
+        this.animate = this.animate.bind(this);
+    }
+
+    mount(canvas) {
+        if (!(canvas instanceof HTMLCanvasElement)) {
+            this.unmount();
+            return;
+        }
+
+        if (this.canvas === canvas) {
+            this.handleResize();
+            return;
+        }
+
+        this.unmount();
+        this.canvas = canvas;
+        this.context = canvas.getContext('2d');
+
+        if (!this.context) {
+            return;
+        }
+
+        this.canvas.addEventListener('pointerdown', this.handlePointerDown);
+        this.canvas.addEventListener('pointermove', this.handlePointerMove);
+        this.canvas.addEventListener('pointerup', this.handlePointerUp);
+        this.canvas.addEventListener('pointerleave', this.handlePointerLeave);
+        this.canvas.addEventListener('pointercancel', this.handlePointerLeave);
+        this.canvas.addEventListener('wheel', this.handleWheel, { passive: false });
+
+        if ('ResizeObserver' in window) {
+            this.resizeObserver = new ResizeObserver(() => {
+                this.handleResize();
+            });
+            this.resizeObserver.observe(this.canvas);
+        } else {
+            window.addEventListener('resize', this.handleResize);
+        }
+
+        this.handleResize();
+    }
+
+    unmount() {
+        if (this.canvas) {
+            this.canvas.removeEventListener('pointerdown', this.handlePointerDown);
+            this.canvas.removeEventListener('pointermove', this.handlePointerMove);
+            this.canvas.removeEventListener('pointerup', this.handlePointerUp);
+            this.canvas.removeEventListener('pointerleave', this.handlePointerLeave);
+            this.canvas.removeEventListener('pointercancel', this.handlePointerLeave);
+            this.canvas.removeEventListener('wheel', this.handleWheel);
+        }
+
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+            this.resizeObserver = null;
+        } else {
+            window.removeEventListener('resize', this.handleResize);
+        }
+
+        if (this.frameId) {
+            window.cancelAnimationFrame(this.frameId);
+            this.frameId = 0;
+        }
+
+        this.canvas = null;
+        this.context = null;
+        this.draggedNode = null;
+        this.isPanning = false;
+    }
+
+    setData(graphData = {}) {
+        const nextNodes = Array.isArray(graphData.nodes) ? graphData.nodes : [];
+        const nextEdges = Array.isArray(graphData.edges) ? graphData.edges : [];
+        const previousNodes = this.nodeMap;
+        const radius = Math.min(this.width, this.height) * 0.28 || 160;
+        const count = Math.max(nextNodes.length, 1);
+        const nodeMap = new Map();
+        const degreeById = nextEdges.reduce((degrees, edge) => {
+            degrees.set(edge.source, (degrees.get(edge.source) || 0) + 1);
+            degrees.set(edge.target, (degrees.get(edge.target) || 0) + 1);
+            return degrees;
+        }, new Map());
+
+        this.nodes = nextNodes.map((note, index) => {
+            const existingNode = previousNodes.get(note.id);
+            const angle = (Math.PI * 2 * index) / count;
+            const degree = degreeById.get(note.id) || 0;
+            const nextNode = {
+                id: note.id,
+                note,
+                x: existingNode?.x ?? Math.cos(angle) * radius,
+                y: existingNode?.y ?? Math.sin(angle) * radius,
+                vx: existingNode?.vx ?? 0,
+                vy: existingNode?.vy ?? 0,
+                radius: 16 + Math.min(degree * 2.1, 14),
+                mass: 1 + Math.min(degree * 0.16, 1.6)
+            };
+
+            nodeMap.set(nextNode.id, nextNode);
+            return nextNode;
+        });
+
+        this.nodeMap = nodeMap;
+        this.edges = nextEdges
+            .map((edge) => {
+                const sourceNode = nodeMap.get(edge.source);
+                const targetNode = nodeMap.get(edge.target);
+
+                if (!sourceNode || !targetNode) {
+                    return null;
+                }
+
+                return {
+                    ...edge,
+                    sourceNode,
+                    targetNode
+                };
+            })
+            .filter(Boolean);
+
+        if (this.selectedNoteId && !this.nodeMap.has(this.selectedNoteId)) {
+            this.selectedNoteId = '';
+        }
+
+        if (this.hoveredNoteId && !this.nodeMap.has(this.hoveredNoteId)) {
+            this.hoveredNoteId = '';
+        }
+
+        this.kick(24);
+    }
+
+    setSelectedNoteId(noteId) {
+        this.selectedNoteId = this.nodeMap.has(noteId) ? noteId : '';
+        this.draw();
+    }
+
+    setActive(isActive) {
+        this.isActive = Boolean(isActive);
+
+        if (this.isActive) {
+            this.kick(18);
+            return;
+        }
+
+        if (this.frameId) {
+            window.cancelAnimationFrame(this.frameId);
+            this.frameId = 0;
+        }
+    }
+
+    refresh() {
+        this.draw();
+    }
+
+    handleResize() {
+        if (!this.canvas || !this.context) {
+            return;
+        }
+
+        const bounds = this.canvas.getBoundingClientRect();
+        const nextWidth = Math.max(Math.floor(bounds.width), 320);
+        const nextHeight = Math.max(Math.floor(bounds.height), 320);
+        const previousWidth = this.width || nextWidth;
+        const previousHeight = this.height || nextHeight;
+
+        this.width = nextWidth;
+        this.height = nextHeight;
+        this.dpr = window.devicePixelRatio || 1;
+        this.canvas.width = Math.floor(this.width * this.dpr);
+        this.canvas.height = Math.floor(this.height * this.dpr);
+
+        if (!this.transform.x && !this.transform.y) {
+            this.transform.x = this.width / 2;
+            this.transform.y = this.height / 2;
+        } else {
+            this.transform.x += (this.width - previousWidth) / 2;
+            this.transform.y += (this.height - previousHeight) / 2;
+        }
+
+        this.context.setTransform(1, 0, 0, 1, 0, 0);
+        this.draw();
+    }
+
+    kick(frameBudget = 14) {
+        this.shouldAnimate = true;
+        this.animationBudget = Math.max(this.animationBudget || 0, frameBudget);
+
+        if (!this.isActive || this.frameId) {
+            this.draw();
+            return;
+        }
+
+        this.frameId = window.requestAnimationFrame(this.animate);
+    }
+
+    animate() {
+        this.frameId = 0;
+
+        if (!this.isActive) {
+            return;
+        }
+
+        const energy = this.stepSimulation();
+
+        if (this.animationBudget > 0) {
+            this.animationBudget -= 1;
+        }
+
+        this.draw();
+
+        if (this.shouldAnimate || this.draggedNode || this.isPanning || energy > 0.045 || this.animationBudget > 0) {
+            this.shouldAnimate = false;
+            this.frameId = window.requestAnimationFrame(this.animate);
+        }
+    }
+
+    stepSimulation() {
+        if (!this.nodes.length) {
+            return 0;
+        }
+
+        const repulsionStrength = 8200;
+        const centeringStrength = 0.0019;
+        const damping = this.draggedNode ? 0.76 : 0.88;
+        const maxVelocity = 12;
+
+        for (let sourceIndex = 0; sourceIndex < this.nodes.length; sourceIndex += 1) {
+            const sourceNode = this.nodes[sourceIndex];
+
+            if (sourceNode === this.draggedNode) {
+                continue;
+            }
+
+            for (let targetIndex = sourceIndex + 1; targetIndex < this.nodes.length; targetIndex += 1) {
+                const targetNode = this.nodes[targetIndex];
+
+                if (targetNode === this.draggedNode) {
+                    continue;
+                }
+
+                const dx = targetNode.x - sourceNode.x;
+                const dy = targetNode.y - sourceNode.y;
+                const distanceSquared = Math.max((dx * dx) + (dy * dy), 64);
+                const distance = Math.sqrt(distanceSquared);
+                const force = repulsionStrength / distanceSquared;
+                const offsetX = (dx / distance) * force;
+                const offsetY = (dy / distance) * force;
+
+                sourceNode.vx -= offsetX / sourceNode.mass;
+                sourceNode.vy -= offsetY / sourceNode.mass;
+                targetNode.vx += offsetX / targetNode.mass;
+                targetNode.vy += offsetY / targetNode.mass;
+            }
+        }
+
+        this.edges.forEach((edge) => {
+            const { sourceNode, targetNode, weight } = edge;
+
+            if (!sourceNode || !targetNode) {
+                return;
+            }
+
+            const dx = targetNode.x - sourceNode.x;
+            const dy = targetNode.y - sourceNode.y;
+            const distance = Math.max(Math.sqrt((dx * dx) + (dy * dy)), 0.001);
+            const targetDistance = 178 - (weight * 76);
+            const springStrength = 0.003 + (weight * 0.006);
+            const stretch = distance - targetDistance;
+            const offsetX = (dx / distance) * stretch * springStrength;
+            const offsetY = (dy / distance) * stretch * springStrength;
+
+            if (sourceNode !== this.draggedNode) {
+                sourceNode.vx += offsetX;
+                sourceNode.vy += offsetY;
+            }
+
+            if (targetNode !== this.draggedNode) {
+                targetNode.vx -= offsetX;
+                targetNode.vy -= offsetY;
+            }
+        });
+
+        let energy = 0;
+
+        this.nodes.forEach((node) => {
+            if (node === this.draggedNode) {
+                return;
+            }
+
+            node.vx += (-node.x) * centeringStrength;
+            node.vy += (-node.y) * centeringStrength;
+            node.vx *= damping;
+            node.vy *= damping;
+
+            node.vx = Math.max(-maxVelocity, Math.min(maxVelocity, node.vx));
+            node.vy = Math.max(-maxVelocity, Math.min(maxVelocity, node.vy));
+            node.x += node.vx;
+            node.y += node.vy;
+            energy += Math.abs(node.vx) + Math.abs(node.vy);
+        });
+
+        return energy / this.nodes.length;
+    }
+
+    draw() {
+        if (!this.context || !this.canvas) {
+            return;
+        }
+
+        const ctx = this.context;
+        const styles = getComputedStyle(document.documentElement);
+        const surfaceColor = styles.getPropertyValue('--surface-strong').trim() || '#ffffff';
+        const borderColor = styles.getPropertyValue('--border').trim() || 'rgba(0, 0, 0, 0.12)';
+        const textColor = styles.getPropertyValue('--text').trim() || '#1f2933';
+        const mutedTextColor = styles.getPropertyValue('--text-muted').trim() || '#6b7280';
+        const accentColor = styles.getPropertyValue('--accent-strong').trim() || '#506458';
+
+        ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        ctx.clearRect(0, 0, this.width, this.height);
+        ctx.fillStyle = surfaceColor;
+        ctx.fillRect(0, 0, this.width, this.height);
+
+        this.drawGraphGrid(ctx, borderColor);
+
+        ctx.save();
+        ctx.translate(this.transform.x, this.transform.y);
+        ctx.scale(this.transform.scale, this.transform.scale);
+
+        this.edges.forEach((edge) => {
+            ctx.beginPath();
+            ctx.moveTo(edge.sourceNode.x, edge.sourceNode.y);
+            ctx.lineTo(edge.targetNode.x, edge.targetNode.y);
+            ctx.lineWidth = 1 + (edge.weight * 1.6);
+            ctx.strokeStyle = this.createAlphaColor(mutedTextColor, 0.24 + (edge.weight * 0.24));
+            ctx.stroke();
+        });
+
+        this.nodes.forEach((node) => {
+            const isSelected = node.id === this.selectedNoteId;
+            const isHovered = node.id === this.hoveredNoteId;
+            const fillColor = this.getNodeColor(node.note);
+            const ringColor = isSelected ? accentColor : borderColor;
+
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, node.radius + (isSelected ? 5 : (isHovered ? 3 : 0)), 0, Math.PI * 2);
+            ctx.fillStyle = this.createAlphaColor(fillColor, isSelected ? 0.16 : 0.1);
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+            ctx.fillStyle = fillColor;
+            ctx.strokeStyle = ringColor;
+            ctx.lineWidth = isSelected ? 2.4 : 1.2;
+            ctx.fill();
+            ctx.stroke();
+
+            const shouldDrawLabel = isSelected
+                || isHovered
+                || this.transform.scale >= 1.05
+                || this.nodes.length <= 18;
+
+            if (!shouldDrawLabel) {
+                return;
+            }
+
+            const label = truncateText(node.note.title || 'Untitled note', 26);
+
+            ctx.font = '600 12px "Plus Jakarta Sans", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+
+            const paddingX = 8;
+            const paddingY = 5;
+            const textWidth = ctx.measureText(label).width;
+            const labelWidth = textWidth + (paddingX * 2);
+            const labelHeight = 24;
+            const labelX = node.x - (labelWidth / 2);
+            const labelY = node.y + node.radius + 10;
+
+            ctx.fillStyle = this.createAlphaColor(surfaceColor, 0.92);
+            ctx.strokeStyle = this.createAlphaColor(borderColor, 0.96);
+            ctx.lineWidth = 1 / this.transform.scale;
+            ctx.beginPath();
+            ctx.roundRect(labelX, labelY, labelWidth, labelHeight, 12);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = textColor;
+            ctx.fillText(label, node.x, labelY + paddingY + 1);
+        });
+
+        ctx.restore();
+    }
+
+    drawGraphGrid(ctx, borderColor) {
+        const spacing = 44;
+
+        ctx.save();
+        ctx.strokeStyle = this.createAlphaColor(borderColor, 0.28);
+        ctx.lineWidth = 1;
+
+        for (let x = 0; x <= this.width; x += spacing) {
+            ctx.beginPath();
+            ctx.moveTo(x + 0.5, 0);
+            ctx.lineTo(x + 0.5, this.height);
+            ctx.stroke();
+        }
+
+        for (let y = 0; y <= this.height; y += spacing) {
+            ctx.beginPath();
+            ctx.moveTo(0, y + 0.5);
+            ctx.lineTo(this.width, y + 0.5);
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+
+    handlePointerDown(event) {
+        if (!this.canvas) {
+            return;
+        }
+
+        const point = this.getCanvasPoint(event);
+        const worldPoint = this.toWorld(point.x, point.y);
+        const node = this.findNodeAtPoint(worldPoint.x, worldPoint.y);
+
+        this.pointerDownNodeId = node?.id || '';
+        this.pointerDownPosition = point;
+        this.didPointerMove = false;
+
+        if (node) {
+            this.draggedNode = node;
+            this.dragPointerOffset.x = worldPoint.x - node.x;
+            this.dragPointerOffset.y = worldPoint.y - node.y;
+            node.vx = 0;
+            node.vy = 0;
+        } else {
+            this.isPanning = true;
+            this.panOrigin.x = point.x;
+            this.panOrigin.y = point.y;
+            this.panStart.x = this.transform.x;
+            this.panStart.y = this.transform.y;
+        }
+
+        this.canvas.setPointerCapture(event.pointerId);
+        this.kick(18);
+    }
+
+    handlePointerMove(event) {
+        if (!this.canvas) {
+            return;
+        }
+
+        const point = this.getCanvasPoint(event);
+        const worldPoint = this.toWorld(point.x, point.y);
+        const moveDistance = Math.hypot(
+            point.x - this.pointerDownPosition.x,
+            point.y - this.pointerDownPosition.y
+        );
+
+        if (moveDistance > 3) {
+            this.didPointerMove = true;
+        }
+
+        if (this.draggedNode) {
+            this.draggedNode.x = worldPoint.x - this.dragPointerOffset.x;
+            this.draggedNode.y = worldPoint.y - this.dragPointerOffset.y;
+            this.draggedNode.vx = 0;
+            this.draggedNode.vy = 0;
+            this.kick(22);
+            return;
+        }
+
+        if (this.isPanning) {
+            this.transform.x = this.panStart.x + (point.x - this.panOrigin.x);
+            this.transform.y = this.panStart.y + (point.y - this.panOrigin.y);
+            this.draw();
+            return;
+        }
+
+        const hoveredNode = this.findNodeAtPoint(worldPoint.x, worldPoint.y);
+        const nextHoveredId = hoveredNode?.id || '';
+
+        if (nextHoveredId !== this.hoveredNoteId) {
+            this.hoveredNoteId = nextHoveredId;
+            this.canvas.style.cursor = hoveredNode ? 'grab' : 'default';
+            this.draw();
+        }
+    }
+
+    handlePointerUp(event) {
+        if (!this.canvas) {
+            return;
+        }
+
+        const point = this.getCanvasPoint(event);
+        const worldPoint = this.toWorld(point.x, point.y);
+        const releasedNode = this.findNodeAtPoint(worldPoint.x, worldPoint.y);
+        const shouldSelect = !this.didPointerMove
+            && releasedNode
+            && releasedNode.id === this.pointerDownNodeId;
+
+        if (this.canvas.hasPointerCapture(event.pointerId)) {
+            this.canvas.releasePointerCapture(event.pointerId);
+        }
+        this.draggedNode = null;
+        this.isPanning = false;
+        this.pointerDownNodeId = '';
+        this.canvas.style.cursor = releasedNode ? 'grab' : 'default';
+
+        if (shouldSelect) {
+            this.selectedNoteId = releasedNode.id;
+            this.onSelect(releasedNode.id);
+        }
+
+        this.kick(16);
+    }
+
+    handlePointerLeave(event) {
+        this.hoveredNoteId = '';
+
+        if (event?.type === 'pointercancel') {
+            this.draggedNode = null;
+            this.isPanning = false;
+            this.pointerDownNodeId = '';
+        }
+
+        if (!this.draggedNode && !this.isPanning) {
+            this.draw();
+        }
+    }
+
+    handleWheel(event) {
+        if (!this.canvas) {
+            return;
+        }
+
+        event.preventDefault();
+
+        const point = this.getCanvasPoint(event);
+        const beforeZoom = this.toWorld(point.x, point.y);
+        const delta = event.deltaY < 0 ? 1.08 : 0.92;
+        const nextScale = Math.max(GRAPH_MIN_SCALE, Math.min(GRAPH_MAX_SCALE, this.transform.scale * delta));
+
+        if (nextScale === this.transform.scale) {
+            return;
+        }
+
+        this.transform.scale = nextScale;
+        this.transform.x = point.x - (beforeZoom.x * this.transform.scale);
+        this.transform.y = point.y - (beforeZoom.y * this.transform.scale);
+        this.kick(8);
+    }
+
+    getCanvasPoint(event) {
+        const bounds = this.canvas?.getBoundingClientRect();
+
+        return {
+            x: (event.clientX - (bounds?.left || 0)),
+            y: (event.clientY - (bounds?.top || 0))
+        };
+    }
+
+    toWorld(screenX, screenY) {
+        return {
+            x: (screenX - this.transform.x) / this.transform.scale,
+            y: (screenY - this.transform.y) / this.transform.scale
+        };
+    }
+
+    findNodeAtPoint(x, y) {
+        for (let index = this.nodes.length - 1; index >= 0; index -= 1) {
+            const node = this.nodes[index];
+            const distance = Math.hypot(node.x - x, node.y - y);
+
+            if (distance <= node.radius + 4) {
+                return node;
+            }
+        }
+
+        return null;
+    }
+
+    getNodeColor(note = {}) {
+        const baseTag = Array.isArray(note.tags) && note.tags.length
+            ? note.tags[0]
+            : UNTAGGED_FILTER_LABEL;
+        const hue = getTagHue(baseTag);
+        const lightness = state.activeTheme === 'dark' ? '69%' : '44%';
+        const saturation = baseTag === UNTAGGED_FILTER_LABEL ? '10%' : '58%';
+
+        return `hsl(${hue} ${saturation} ${lightness})`;
+    }
+
+    createAlphaColor(color, alpha) {
+        if (color.startsWith('rgb')) {
+            const values = color.match(/[\d.]+/g);
+
+            if (values && values.length >= 3) {
+                return `rgba(${values[0]}, ${values[1]}, ${values[2]}, ${alpha})`;
+            }
+        }
+
+        if (color.startsWith('hsl')) {
+            const values = color.match(/[\d.]+%?/g);
+
+            if (values && values.length >= 3) {
+                return `hsl(${values[0]} ${values[1]} ${values[2]} / ${alpha})`;
+            }
+        }
+
+        if (color.startsWith('#')) {
+            const normalized = color.length === 4
+                ? color
+                    .slice(1)
+                    .split('')
+                    .map((value) => value + value)
+                    .join('')
+                : color.slice(1, 7);
+            const red = Number.parseInt(normalized.slice(0, 2), 16);
+            const green = Number.parseInt(normalized.slice(2, 4), 16);
+            const blue = Number.parseInt(normalized.slice(4, 6), 16);
+
+            if ([red, green, blue].every((value) => Number.isFinite(value))) {
+                return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+            }
+        }
+
+        return color;
+    }
+}
+
+const graphCanvasController = new GraphCanvasController({
+    onSelect(noteId) {
+        if (!noteId) {
+            return;
+        }
+
+        state.selectedGraphNoteId = noteId;
+        renderGraphSelection();
+    }
+});
 
 function normalizeSearchScore(score, source = 'api') {
     const numericScore = Number(score);
@@ -1642,6 +2327,240 @@ function syncGraphData(notes) {
             edges: []
         };
     }
+}
+
+function setActiveLibraryView(view) {
+    const nextView = view === 'graph' ? 'graph' : 'list';
+
+    if (state.activeLibraryView !== nextView) {
+        state.activeLibraryView = nextView;
+    }
+
+    syncLibraryView();
+
+    if (nextView === 'graph') {
+        renderGraphView();
+    }
+}
+
+function syncLibraryView() {
+    const listView = document.querySelector('#notes-list-view');
+    const graphView = document.querySelector('#graph-view');
+    const tabButtons = document.querySelectorAll('.view-tab');
+    const isGraphView = state.activeLibraryView === 'graph';
+
+    if (listView) {
+        listView.hidden = isGraphView;
+    }
+
+    if (graphView) {
+        graphView.hidden = !isGraphView;
+    }
+
+    tabButtons.forEach((button) => {
+        const isSelected = button instanceof HTMLButtonElement
+            && button.dataset.libraryView === state.activeLibraryView;
+
+        button.classList.toggle('is-active', isSelected);
+        button.setAttribute('aria-selected', String(isSelected));
+        button.tabIndex = isSelected ? 0 : -1;
+    });
+
+    graphCanvasController.setActive(isGraphView);
+}
+
+function syncGraphSelection(notes = state.notes) {
+    const selectedNoteId = state.selectedGraphNoteId;
+    const isSelectionVisible = notes.some((note) => note.id === selectedNoteId);
+
+    if (!isSelectionVisible) {
+        state.selectedGraphNoteId = '';
+    }
+}
+
+function createGraphSelectedTag(tag) {
+    const pill = document.createElement('span');
+
+    pill.className = 'graph-note-tag';
+    pill.textContent = tag;
+    setTagTone(tag, pill);
+
+    return pill;
+}
+
+function createGraphSelectionPlaceholder(copy) {
+    const card = document.createElement('div');
+    const title = document.createElement('p');
+    const body = document.createElement('p');
+
+    card.className = 'graph-note-card graph-note-card-empty';
+    title.className = 'graph-note-placeholder-title';
+    title.textContent = 'Select a note';
+    body.className = 'graph-note-placeholder-copy';
+    body.textContent = copy;
+    card.append(title, body);
+
+    return card;
+}
+
+function createGraphSelectionCard(note) {
+    const article = document.createElement('article');
+    const header = document.createElement('div');
+    const title = document.createElement('h3');
+    const meta = document.createElement('p');
+    const body = document.createElement('p');
+    const tags = document.createElement('div');
+    const actions = document.createElement('div');
+    const openInListButton = document.createElement('button');
+
+    article.className = 'graph-note-card';
+    header.className = 'graph-note-header';
+    title.className = 'graph-note-title';
+    title.textContent = note.title || 'Untitled note';
+
+    meta.className = 'graph-note-meta';
+    meta.textContent = `${note.type === 'link' ? 'Link' : 'Note'} • ${formatRelativeTime(note.createdAt)}`;
+    header.append(title, meta);
+    article.append(header);
+
+    if (note.type === 'link' && note.url) {
+        const link = document.createElement('a');
+
+        link.className = 'graph-note-link';
+        link.href = note.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = note.url;
+        article.append(link);
+    }
+
+    if (note.summary) {
+        const summary = document.createElement('p');
+
+        summary.className = 'graph-note-summary';
+        summary.textContent = note.summary;
+        article.append(summary);
+    }
+
+    body.className = 'graph-note-body';
+    body.textContent = truncateText(note.content || 'No written content saved for this note.', 360);
+    article.append(body);
+
+    if (note.insights.length) {
+        const insightsTitle = document.createElement('p');
+        const insightsList = document.createElement('ul');
+
+        insightsTitle.className = 'graph-note-insights-title';
+        insightsTitle.textContent = 'Key insights';
+        insightsList.className = 'graph-note-insights';
+
+        note.insights.forEach((insight) => {
+            const item = document.createElement('li');
+
+            item.className = 'graph-note-insight';
+            item.textContent = insight;
+            insightsList.append(item);
+        });
+
+        article.append(insightsTitle, insightsList);
+    }
+
+    tags.className = 'graph-note-tags';
+
+    if (note.tags.length) {
+        note.tags.forEach((tag) => {
+            tags.append(createGraphSelectedTag(tag));
+        });
+    } else {
+        const untagged = document.createElement('span');
+
+        untagged.className = 'graph-note-tag graph-note-tag-muted';
+        untagged.textContent = UNTAGGED_FILTER_LABEL;
+        tags.append(untagged);
+    }
+
+    article.append(tags);
+
+    actions.className = 'graph-note-actions';
+
+    openInListButton.className = 'graph-note-action';
+    openInListButton.type = 'button';
+    openInListButton.dataset.noteId = note.id;
+    openInListButton.dataset.graphAction = 'open-in-list';
+    openInListButton.textContent = 'Open in list';
+    actions.append(openInListButton);
+
+    if (note.summary && !note.insights.length) {
+        const helper = document.createElement('p');
+
+        helper.className = 'graph-note-helper';
+        helper.textContent = 'Insights are still loading for this note.';
+        article.append(helper);
+    }
+
+    article.append(actions);
+
+    return article;
+}
+
+function renderGraphSelection() {
+    const selectionPanel = document.querySelector('#graph-note-panel');
+
+    if (!selectionPanel) {
+        return;
+    }
+
+    const selectedNote = state.notes.find((note) => note.id === state.selectedGraphNoteId) || null;
+
+    if (!state.notes.length) {
+        selectionPanel.replaceChildren(createGraphSelectionPlaceholder('Save a note to start mapping connections.'));
+        return;
+    }
+
+    if (!selectedNote) {
+        selectionPanel.replaceChildren(
+            createGraphSelectionPlaceholder('Click a node to inspect the connected note here.')
+        );
+        return;
+    }
+
+    selectionPanel.replaceChildren(createGraphSelectionCard(selectedNote));
+}
+
+function renderGraphView() {
+    const canvas = document.querySelector('#notes-graph-canvas');
+    const graphEmpty = document.querySelector('#graph-empty-state');
+    const graphHint = document.querySelector('#graph-hint');
+    const graphCount = document.querySelector('#graph-count');
+    const hasNotes = state.graphData.nodes.length > 0;
+
+    graphCanvasController.mount(canvas);
+    graphCanvasController.setData(state.graphData);
+    graphCanvasController.setSelectedNoteId(state.selectedGraphNoteId);
+    graphCanvasController.setActive(state.activeLibraryView === 'graph');
+
+    if (graphEmpty) {
+        graphEmpty.hidden = hasNotes;
+    }
+
+    if (canvas instanceof HTMLCanvasElement) {
+        canvas.hidden = !hasNotes;
+    }
+
+    if (graphHint) {
+        graphHint.textContent = hasNotes
+            ? 'Drag notes to rearrange. Scroll to zoom. Drag the background to pan.'
+            : 'The graph will appear once there are notes to connect.';
+    }
+
+    if (graphCount) {
+        const edgeCount = state.graphData.edges.length;
+        graphCount.textContent = hasNotes
+            ? `${formatCountLabel(state.graphData.nodes.length, 'node')} • ${formatCountLabel(edgeCount, 'connection')}`
+            : '0 nodes';
+    }
+
+    renderGraphSelection();
 }
 
 function createTagPill(tag, options = {}) {
@@ -2938,9 +3857,10 @@ function renderNotesList() {
     }
 
     const allNotes = Storage.getAll();
-    syncGraphData(allNotes);
     renderTagFilters(allNotes);
     state.notes = getDisplayedNotes(allNotes);
+    syncGraphData(state.notes);
+    syncGraphSelection(state.notes);
 
     syncOverview(allNotes);
     syncNotesPresentation(allNotes);
@@ -2948,6 +3868,7 @@ function renderNotesList() {
 
     if (!state.notes.length) {
         notesList.replaceChildren(createEmptyState(allNotes));
+        renderGraphView();
         return;
     }
 
@@ -2960,6 +3881,7 @@ function renderNotesList() {
     notesList.replaceChildren(fragment);
     syncExpandedRelatedNotes();
     ensureVisibleInsights(state.notes);
+    renderGraphView();
 }
 
 function getCurrentPage() {
@@ -3113,8 +4035,33 @@ function renderHomePage() {
                     <p id="notes-count-indicator" class="notes-count-indicator" aria-live="polite">0 notes saved</p>
                     <div id="notes-tag-filters" class="tag-filter-bar" aria-label="Filter notes by tag" hidden></div>
                     <p id="notes-search-status" class="notes-search-status" aria-live="polite"></p>
+                    <div class="view-tabs" role="tablist" aria-label="Library views">
+                        <button class="view-tab is-active" type="button" role="tab" aria-selected="true" data-library-view="list">List</button>
+                        <button class="view-tab" type="button" role="tab" aria-selected="false" tabindex="-1" data-library-view="graph">Graph</button>
+                    </div>
 
-                    <div id="notes-list" class="notes-list" aria-live="polite"></div>
+                    <div id="notes-list-view" class="library-view-panel">
+                        <div id="notes-list" class="notes-list" aria-live="polite"></div>
+                    </div>
+
+                    <section id="graph-view" class="graph-view" hidden>
+                        <div class="graph-panel-header">
+                            <p id="graph-hint" class="graph-hint">Drag notes to rearrange. Scroll to zoom. Drag the background to pan.</p>
+                            <span id="graph-count" class="graph-count">0 nodes</span>
+                        </div>
+
+                        <div class="graph-stage">
+                            <div class="graph-canvas-shell">
+                                <canvas id="notes-graph-canvas" class="graph-canvas" aria-label="Knowledge graph"></canvas>
+                                <div id="graph-empty-state" class="graph-empty-state">
+                                    <p class="graph-empty-title">No graph yet.</p>
+                                    <p class="graph-empty-copy">Save a few notes or links and their connections will appear here.</p>
+                                </div>
+                            </div>
+
+                            <aside id="graph-note-panel" class="graph-note-panel" aria-live="polite"></aside>
+                        </div>
+                    </section>
                 </section>
             </div>
         </main>
@@ -3133,6 +4080,7 @@ function renderHomePage() {
     const tagFilters = document.querySelector('#notes-tag-filters');
     const saveButton = document.querySelector('#save-note');
     const notesList = document.querySelector('#notes-list');
+    const graphNotePanel = document.querySelector('#graph-note-panel');
     const themeToggle = document.querySelector('#theme-toggle');
     const captureTagControls = {
         tagsInput,
@@ -3150,6 +4098,12 @@ function renderHomePage() {
 
     themeToggle.addEventListener('click', () => {
         toggleThemePreference();
+    });
+
+    document.querySelectorAll('.view-tab').forEach((button) => {
+        button.addEventListener('click', () => {
+            setActiveLibraryView(button.dataset.libraryView);
+        });
     });
 
     saveButton.addEventListener('click', async () => {
@@ -3327,7 +4281,23 @@ function renderHomePage() {
         }
     });
 
+    graphNotePanel?.addEventListener('click', (event) => {
+        const target = event.target instanceof HTMLElement
+            ? event.target.closest('[data-graph-action="open-in-list"]')
+            : null;
+
+        if (!(target instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        setActiveLibraryView('list');
+        window.requestAnimationFrame(() => {
+            focusNoteCard(target.dataset.noteId);
+        });
+    });
+
     renderNotesList();
+    syncLibraryView();
 }
 
 function renderJournalPage() {

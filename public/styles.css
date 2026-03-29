@@ -864,6 +864,265 @@ a {
     transition: opacity 180ms ease, transform 180ms ease, color 180ms ease;
 }
 
+.view-tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: fit-content;
+    padding: 0.34rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-muted) 92%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.view-tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.55rem;
+    padding: 0.65rem 1rem;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+    font-weight: 700;
+}
+
+.view-tab:hover,
+.view-tab:focus-visible {
+    outline: none;
+    color: var(--text);
+    background: color-mix(in srgb, var(--surface-strong) 90%, transparent);
+}
+
+.view-tab.is-active {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 70%, var(--surface-strong)), var(--surface-strong));
+    color: var(--accent-strong);
+    box-shadow: var(--shadow-sm);
+}
+
+.library-view-panel {
+    min-width: 0;
+}
+
+.graph-view {
+    display: grid;
+    gap: var(--space-5);
+}
+
+.graph-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+}
+
+.graph-hint {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.graph-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.3rem;
+    padding: 0.45rem 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-strong);
+    color: var(--accent-strong);
+    font-size: 0.8rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.graph-stage {
+    display: grid;
+    gap: var(--space-5);
+    grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
+    align-items: stretch;
+}
+
+.graph-canvas-shell,
+.graph-note-panel {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius-md) + 2px);
+    background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
+    box-shadow: var(--shadow-sm);
+}
+
+.graph-canvas-shell {
+    position: relative;
+    overflow: hidden;
+    min-height: 480px;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 24%, transparent), transparent 28%),
+        color-mix(in srgb, var(--surface-strong) 94%, transparent);
+}
+
+.graph-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 480px;
+    touch-action: none;
+    cursor: default;
+}
+
+.graph-empty-state {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    gap: var(--space-3);
+    place-content: center;
+    padding: var(--space-8);
+    text-align: center;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--hero-glow-primary) 50%, transparent), transparent 78%),
+        color-mix(in srgb, var(--surface-strong) 96%, transparent);
+}
+
+.graph-empty-title,
+.graph-note-placeholder-title {
+    font-size: 1.12rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.graph-empty-copy,
+.graph-note-placeholder-copy {
+    color: var(--text-muted);
+}
+
+.graph-note-panel {
+    padding: var(--space-5);
+}
+
+.graph-note-card,
+.graph-note-card-empty {
+    display: grid;
+    gap: var(--space-4);
+}
+
+.graph-note-header {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.graph-note-title {
+    font-size: 1.08rem;
+    line-height: 1.25;
+    letter-spacing: -0.02em;
+    word-break: break-word;
+}
+
+.graph-note-meta,
+.graph-note-link,
+.graph-note-helper {
+    color: var(--text-muted);
+    font-size: 0.88rem;
+}
+
+.graph-note-link {
+    word-break: break-all;
+}
+
+.graph-note-link:hover,
+.graph-note-link:focus-visible {
+    color: var(--accent-strong);
+}
+
+.graph-note-summary {
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    color: var(--text);
+    font-style: italic;
+    white-space: pre-wrap;
+}
+
+.graph-note-body {
+    color: var(--text);
+    white-space: pre-wrap;
+}
+
+.graph-note-insights-title {
+    color: var(--accent-strong);
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.graph-note-insights {
+    display: grid;
+    gap: var(--space-3);
+    padding-left: 1.05rem;
+}
+
+.graph-note-insight {
+    color: var(--text);
+}
+
+.graph-note-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.graph-note-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.34rem 0.68rem;
+    border: 1px solid hsl(var(--tag-hue, 172) 55% 45% / var(--tag-pill-border-alpha));
+    border-radius: 999px;
+    background: hsl(var(--tag-hue, 172) 75% 50% / var(--tag-pill-bg-alpha));
+    color: hsl(var(--tag-hue, 172) 52% var(--tag-pill-text-lightness));
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.graph-note-tag-muted {
+    border-color: color-mix(in srgb, var(--border) 88%, transparent);
+    background: color-mix(in srgb, var(--surface-muted) 92%, transparent);
+    color: var(--text-muted);
+}
+
+.graph-note-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.graph-note-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.7rem;
+    padding: 0.7rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-muted);
+    color: var(--text);
+    font-size: 0.88rem;
+    font-weight: 700;
+}
+
+.graph-note-action:hover,
+.graph-note-action:focus-visible {
+    outline: none;
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+    background: var(--surface-strong);
+    box-shadow: var(--shadow-sm);
+}
+
 .notes-panel.is-empty {
     box-shadow:
         0 0 0 1px color-mix(in srgb, var(--accent-soft) 24%, transparent),
@@ -1719,6 +1978,10 @@ a:active {
     .journal-stats {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
+    .graph-stage {
+        grid-template-columns: 1fr;
+    }
 }
 
 @media (max-width: 860px) {
@@ -1775,6 +2038,14 @@ a:active {
         justify-content: flex-start;
     }
 
+    .view-tabs {
+        width: 100%;
+    }
+
+    .view-tab {
+        flex: 1 1 0;
+    }
+
     .theme-toggle {
         width: 100%;
     }
@@ -1824,6 +2095,11 @@ a:active {
     .note-summarize,
     .note-delete {
         flex: 1 1 10rem;
+    }
+
+    .graph-canvas-shell,
+    .graph-canvas {
+        min-height: 380px;
     }
 }
 
@@ -1881,6 +2157,14 @@ a:active {
     .notes-summary,
     .notes-search-status {
         font-size: 0.9rem;
+    }
+
+    .graph-panel-header {
+        align-items: flex-start;
+    }
+
+    .graph-note-panel {
+        padding: var(--space-4);
     }
 }
 
