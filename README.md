@@ -11,56 +11,28 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - Automation workflow that prioritizes GitHub issues before new feature work
 
 ## Status
-- Current phase: `phase6-collaboration`
+- Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `25`
-- Completed issues: `2`
+- Completed tasks: `1`
+- Completed issues: `0`
 
 ## Implemented
-- `mvp-capture-ui`: Capture interface
 - `mvp-scaffold`: Project scaffold
-- `mvp-storage-layer`: LocalStorage persistence
-- `mvp-summarize-api`: AI summarization serverless function
-- `mvp-link-fetch-api`: Link metadata fetcher
-- `mvp-link-save-flow`: Link auto-fetch on save
-- `mvp-semantic-search-api`: Semantic search serverless function
-- `mvp-search-ui`: Semantic search interface
-- `mvp-tags-ui`: Tag system refinement
-- `mvp-tag-suggestions-api`: AI tag suggestions
-- `mvp-tag-suggestions-ui`: Tag suggestions in capture form
-- `mvp-deploy-check`: Deployment verification
-- `p2-auto-tag`: Auto-tag on save
-- `p2-related-notes`: Related notes suggestions
-- `p3-graph-data`: Graph data model
-- `p3-graph-view`: Force-directed graph visualization
-- `p3-timeline`: Learning timeline
-- `p3-clustering`: Topic clustering
-- `p4-voice`: Voice note capture
-- `p4-image`: Image upload and OCR
-- `p4-pdf`: PDF upload and extraction
-- `p5-patterns`: Learning pattern analysis
-- `p5-reminders`: Smart revisit reminders
-- `p5-health`: Knowledge health score
-- `p6-sharing`: Note sharing
 
 ## Recent Changes
+- `c98702d evolve(p6-sharing): Note sharing`
 - `886a116 evolve(p5-health): Knowledge health score`
 - `22c31d6 evolve(p5-reminders): Smart revisit reminders`
 - `5845a08 evolve(p5-patterns): Learning pattern analysis`
 - `844f4ee evolve(p4-pdf): PDF upload and extraction`
-- `00edd22 evolve(p4-image): Image upload and OCR`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
+- Next manifest task candidate: `mvp-capture-ui` in phase `mvp` — Capture interface
+- Next manifest task candidate: `mvp-storage-layer` in phase `mvp` — LocalStorage persistence
+- Next manifest task candidate: `mvp-summarize-api` in phase `mvp` — AI summarization serverless function
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
-- Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
-- Next manifest task candidate: `p2-key-insights` in phase `phase2-intelligence` — Key insight extraction
-- Next manifest task candidate: `p2-chrome-extension` in phase `phase2-intelligence` — Chrome extension scaffold
-- Next manifest task candidate: `p6-supabase` in phase `phase6-collaboration` — Migrate to Supabase
-
-## Resolved Issues
-- `#2`
-- `#3`
+- Next manifest task candidate: `mvp-link-fetch-api` in phase `mvp` — Link metadata fetcher
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)

@@ -10,8 +10,8 @@ import {
 const STORAGE_KEY = 'kh-notes';
 const THEME_STORAGE_KEY = 'kh-theme';
 const THEME_COLORS = {
-    light: '#f7f4ee',
-    dark: '#141412'
+    light: '#f6efe3',
+    dark: '#171512'
 };
 const SEARCH_DEBOUNCE_MS = 300;
 const TAG_SUGGESTIONS_DEBOUNCE_MS = 1000;
