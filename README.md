@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `4`
+- Completed tasks: `5`
 - Completed issues: `0`
 
 ## Implemented
@@ -21,21 +21,22 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `mvp-capture-ui`: Capture interface
 - `mvp-storage-layer`: LocalStorage persistence
 - `mvp-summarize-api`: AI summarization serverless function
+- `mvp-link-fetch-api`: Link metadata fetcher
 
 ## Recent Changes
+- `ebb715e evolve(mvp-summarize-api): AI summarization serverless function`
 - `4295623 evolve(mvp-storage-layer): LocalStorage persistence`
 - `6c917bd evolve(mvp-capture-ui): Capture interface`
 - `ec44085 evolve(mvp-scaffold): Project scaffold`
 - `c98702d evolve(p6-sharing): Note sharing`
-- `886a116 evolve(p5-health): Knowledge health score`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
-- Next manifest task candidate: `mvp-link-fetch-api` in phase `mvp` — Link metadata fetcher
 - Next manifest task candidate: `mvp-link-save-flow` in phase `mvp` — Link auto-fetch on save
 - Next manifest task candidate: `mvp-semantic-search-api` in phase `mvp` — Semantic search serverless function
 - Next manifest task candidate: `mvp-search-ui` in phase `mvp` — Semantic search interface
+- Next manifest task candidate: `mvp-tags-ui` in phase `mvp` — Tag system refinement
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)
