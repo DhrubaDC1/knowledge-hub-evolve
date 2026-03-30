@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `8`
+- Completed tasks: `9`
 - Completed issues: `0`
 
 ## Implemented
@@ -25,21 +25,22 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `mvp-link-save-flow`: Link auto-fetch on save
 - `mvp-semantic-search-api`: Semantic search serverless function
 - `mvp-search-ui`: Semantic search interface
+- `mvp-tags-ui`: Tag system refinement
 
 ## Recent Changes
+- `ed2638c evolve(mvp-search-ui): Semantic search interface`
 - `6562dcf evolve(mvp-semantic-search-api): Semantic search serverless function`
 - `1cd8021 evolve(mvp-link-save-flow): Link auto-fetch on save`
 - `b5a39d6 evolve(mvp-link-fetch-api): Link metadata fetcher`
 - `ebb715e evolve(mvp-summarize-api): AI summarization serverless function`
-- `4295623 evolve(mvp-storage-layer): LocalStorage persistence`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
-- Next manifest task candidate: `mvp-tags-ui` in phase `mvp` — Tag system refinement
 - Next manifest task candidate: `mvp-tag-suggestions-api` in phase `mvp` — AI tag suggestions
 - Next manifest task candidate: `mvp-tag-suggestions-ui` in phase `mvp` — Tag suggestions in capture form
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
+- Next manifest task candidate: `mvp-deploy-check` in phase `mvp` — Deployment verification
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)
