@@ -13,26 +13,27 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `1`
+- Completed tasks: `2`
 - Completed issues: `0`
 
 ## Implemented
 - `mvp-scaffold`: Project scaffold
+- `mvp-capture-ui`: Capture interface
 
 ## Recent Changes
+- `ec44085 evolve(mvp-scaffold): Project scaffold`
 - `c98702d evolve(p6-sharing): Note sharing`
 - `886a116 evolve(p5-health): Knowledge health score`
 - `22c31d6 evolve(p5-reminders): Smart revisit reminders`
 - `5845a08 evolve(p5-patterns): Learning pattern analysis`
-- `844f4ee evolve(p4-pdf): PDF upload and extraction`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
-- Next manifest task candidate: `mvp-capture-ui` in phase `mvp` — Capture interface
 - Next manifest task candidate: `mvp-storage-layer` in phase `mvp` — LocalStorage persistence
 - Next manifest task candidate: `mvp-summarize-api` in phase `mvp` — AI summarization serverless function
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
 - Next manifest task candidate: `mvp-link-fetch-api` in phase `mvp` — Link metadata fetcher
+- Next manifest task candidate: `mvp-link-save-flow` in phase `mvp` — Link auto-fetch on save
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)

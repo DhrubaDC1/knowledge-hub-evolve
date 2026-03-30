@@ -7197,7 +7197,7 @@ function renderHomePage() {
                                 </button>
                             </div>
                         </div>
-                        <h1>Capture what matters. Revisit it with clarity.</h1>
+                        <h1>Capture. Understand. Recall.</h1>
                         <p class="hero-copy">A calm, modern workspace for notes, links, and AI summaries that stays readable in light and dark themes.</p>
 
                         <div class="hero-metrics" aria-label="Knowledge Hub overview">
@@ -7343,7 +7343,7 @@ function renderHomePage() {
                                     <span>Tags</span>
                                     <div class="tag-input" id="note-tags-control">
                                         <div id="capture-tags-list" class="capture-tags-list" aria-live="polite"></div>
-                                        <input id="note-tags-input" type="text" placeholder="Type a tag and press comma or Enter">
+                                        <input id="note-tags-input" type="text" placeholder="Add tags, comma separated">
                                     </div>
                                     <div id="capture-tag-suggestions" class="capture-suggestions" hidden>
                                         <span class="capture-suggestions-label">Suggested:</span>
@@ -7382,7 +7382,7 @@ function renderHomePage() {
 
                     <label class="field search-field">
                         <span>Search</span>
-                        <input id="notes-search" type="search" placeholder="Search notes, links, and tags...">
+                        <input id="notes-search" type="search" placeholder="Search your knowledge...">
                     </label>
                     <p id="notes-count-indicator" class="notes-count-indicator" aria-live="polite">0 notes saved</p>
                     <div id="notes-tag-filters" class="tag-filter-bar" aria-label="Filter notes by tag" hidden></div>
