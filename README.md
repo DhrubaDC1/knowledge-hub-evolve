@@ -13,7 +13,7 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 ## Status
 - Current phase: `mvp`
 - Current branch: `evolve/mvp-mvp-capture-recall`
-- Completed tasks: `10`
+- Completed tasks: `11`
 - Completed issues: `0`
 
 ## Implemented
@@ -27,21 +27,22 @@ _This README is maintained by `evolve.sh` and refreshed after successful automat
 - `mvp-search-ui`: Semantic search interface
 - `mvp-tags-ui`: Tag system refinement
 - `mvp-tag-suggestions-api`: AI tag suggestions
+- `mvp-tag-suggestions-ui`: Tag suggestions in capture form
 
 ## Recent Changes
+- `e7ef36b evolve(mvp-tag-suggestions-api): AI tag suggestions`
 - `5aaf63d evolve(mvp-tags-ui): Tag system refinement`
 - `ed2638c evolve(mvp-search-ui): Semantic search interface`
 - `6562dcf evolve(mvp-semantic-search-api): Semantic search serverless function`
 - `1cd8021 evolve(mvp-link-save-flow): Link auto-fetch on save`
-- `b5a39d6 evolve(mvp-link-fetch-api): Link metadata fetcher`
 
 ## What's Next
 - No pending actionable GitHub issue detected.
 - Next manifest task candidate: `mvp-summarize-ui` in phase `mvp` — Summarize button and flow
-- Next manifest task candidate: `mvp-tag-suggestions-ui` in phase `mvp` — Tag suggestions in capture form
 - Next manifest task candidate: `mvp-polish` in phase `mvp` — UI polish and error handling
 - Next manifest task candidate: `mvp-deploy-check` in phase `mvp` — Deployment verification
 - Next manifest task candidate: `feat-ai-chat` in phase `mvp` — AI Chat with Your Knowledge
+- Next manifest task candidate: `feat-spaced-repetition` in phase `mvp` — Spaced Repetition System
 
 ## Journal
 - Project history and live automation notes: [JOURNAL.md](./JOURNAL.md)
